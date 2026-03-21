@@ -184,14 +184,14 @@ class DunkingBird:
             self.root.after(0, lambda: self.test_btn.config(state='normal'))
 
     def get_active_window(self):
-        """Get the currently active window ID using xdotool"""
+        """Get the currently active window ID using kdotool"""
         try:
-            result = subprocess.run(['xdotool', 'getactivewindow'],
+            result = subprocess.run(['kdotool', 'getactivewindow'],
                                   capture_output=True, text=True, check=True)
             window_id = result.stdout.strip()
 
             # Get window name for debugging
-            name_result = subprocess.run(['xdotool', 'getwindowname', window_id],
+            name_result = subprocess.run(['kdotool', 'getwindowname', window_id],
                                        capture_output=True, text=True, check=True)
             window_name = name_result.stdout.strip()
 
@@ -203,11 +203,11 @@ class DunkingBird:
             return None
 
     def select_window_interactive(self):
-        """Let user click on a window to select it using xdotool"""
+        """Let user click on a window to select it using xdotool (X11 only)"""
         try:
             print("Waiting for user to click on target window...")
 
-            # Use xdotool selectwindow to let user click on a window
+            # Use xdotool selectwindow to let user click on a window (X11 only)
             # This will change the mouse cursor to crosshairs and wait for a click
             result = subprocess.run(['xdotool', 'selectwindow'],
                                   capture_output=True, text=True, check=True, timeout=30)
@@ -216,7 +216,7 @@ class DunkingBird:
             if window_id:
                 # Get window name for confirmation
                 try:
-                    name_result = subprocess.run(['xdotool', 'getwindowname', window_id],
+                    name_result = subprocess.run(['kdotool', 'getwindowname', window_id],
                                                capture_output=True, text=True, check=True)
                     window_name = name_result.stdout.strip()
                     print(f"User selected window: {window_name} (ID: {window_id})")
@@ -239,8 +239,29 @@ class DunkingBird:
             return None
 
     def get_wayland_window_info(self):
-        """Get active window info on Wayland using various compositor tools"""
+        """Get active window info on Wayland using kdotool or other compositor tools"""
         import json
+
+        # Try kdotool first (works on KDE Wayland and X11)
+        try:
+            result = subprocess.run(['kdotool', 'getactivewindow'],
+                                  capture_output=True, text=True, check=True)
+            window_id = result.stdout.strip()
+
+            if window_id:
+                name_result = subprocess.run(['kdotool', 'getwindowname', window_id],
+                                           capture_output=True, text=True, check=True)
+                class_result = subprocess.run(['kdotool', 'getwindowclassname', window_id],
+                                            capture_output=True, text=True, check=True)
+
+                return {
+                    'id': window_id,
+                    'name': name_result.stdout.strip(),
+                    'class': class_result.stdout.strip(),
+                    'compositor': 'kde'
+                }
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            pass
 
         # Helper to safely check if command exists
         def command_exists(cmd):
@@ -250,7 +271,7 @@ class DunkingBird:
             except (subprocess.CalledProcessError, FileNotFoundError):
                 return False
 
-        # Try sway first (most complete support)
+        # Try sway (for non-KDE Wayland)
         if command_exists('swaymsg'):
             try:
                 result = subprocess.run(['swaymsg', '-t', 'get_tree'],
@@ -316,7 +337,7 @@ class DunkingBird:
             except (subprocess.CalledProcessError, json.JSONDecodeError, ImportError):
                 pass
 
-        # Try KDE/KWin - use newer queryWindowInfo method
+        # Try KDE/KWin - simple capture for Alt+Tab approach
         qdbus_cmd = None
         for cmd in ['qdbus6', 'qdbus-qt5', 'qdbus']:
             if command_exists(cmd):
@@ -324,42 +345,22 @@ class DunkingBird:
                 break
 
         if qdbus_cmd:
+            # KDE fallback - try to get current active window
             try:
-                # Use queryWindowInfo which gives active window info
-                result = subprocess.run([qdbus_cmd, 'org.kde.KWin', '/KWin',
-                                       'org.kde.KWin.queryWindowInfo'],
-                                      capture_output=True, text=True,
-                                      timeout=3, check=True)
-
-                # Parse the result - it's usually in a key=value format
-                window_info = result.stdout.strip()
-                if window_info and 'caption' in window_info:
-                    # Extract window title from the output
-                    title = "KDE Window"
-                    for line in window_info.split('\n'):
-                        if 'caption' in line and '=' in line:
-                            title = line.split('=', 1)[1].strip().strip('"')
-                            break
-
+                result = subprocess.run(['kdotool', 'getactivewindow'],
+                                      capture_output=True, text=True, check=True)
+                window_id = result.stdout.strip()
+                if window_id:
+                    name_result = subprocess.run(['kdotool', 'getwindowname', window_id],
+                                               capture_output=True, text=True, check=True)
                     return {
-                        'id': 'kde_active_window',
-                        'name': title if title else "KDE Window",
-                        'class': 'unknown',
+                        'id': window_id,
+                        'name': name_result.stdout.strip(),
+                        'class': 'kde-window',
                         'compositor': 'kde'
                     }
-
-            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-                # If queryWindowInfo fails, try simpler approach
-                try:
-                    # Just return basic KDE info
-                    return {
-                        'id': 'kde_fallback',
-                        'name': "Active KDE Window",
-                        'class': 'unknown',
-                        'compositor': 'kde'
-                    }
-                except:
-                    pass
+            except:
+                pass
 
         # Fallback: return basic info indicating no specific compositor support
         return {
@@ -376,7 +377,7 @@ class DunkingBird:
 
             # Check session type to provide appropriate instructions
             if os.environ.get('XDG_SESSION_TYPE') == 'wayland':
-                self.window_info_var.set("📋 Capturing active window info (Wayland - sends to active window)")
+                self.window_info_var.set("📋 Capturing target window (will use Alt+Tab to return here)")
             else:
                 self.window_info_var.set("🎯 Click on the window you want to capture (30s timeout)")
 
@@ -413,9 +414,9 @@ class DunkingBird:
                 if window_id:
                     # Get additional window info
                     try:
-                        name_result = subprocess.run(['xdotool', 'getwindowname', window_id],
+                        name_result = subprocess.run(['kdotool', 'getwindowname', window_id],
                                                    capture_output=True, text=True, check=True)
-                        class_result = subprocess.run(['xdotool', 'getwindowclassname', window_id],
+                        class_result = subprocess.run(['kdotool', 'getwindowclassname', window_id],
                                                     capture_output=True, text=True, check=True)
 
                         self.captured_window_id = window_id
@@ -441,68 +442,208 @@ class DunkingBird:
             self.capture_btn.config(state='normal')
 
     def focus_captured_window(self):
-        """Focus the captured window before sending text"""
+        """Focus the captured window using kdotool direct window activation"""
         if not self.captured_window_id:
             return True  # No captured window, continue with active window
 
         try:
-            # Detect if we're on X11 or Wayland
-            if os.environ.get('XDG_SESSION_TYPE') == 'wayland':
-                return self._focus_wayland_window()
-            else:
-                return self._focus_x11_window()
-        except Exception as e:
-            print(f"Error focusing captured window: {e}")
-            return True  # Continue anyway since ydotool works with active window
+            print(f"Focusing captured window: {self.captured_window_name}")
 
-    def _focus_x11_window(self):
-        """Focus window on X11 using xdotool"""
+            # Use kdotool to directly activate the window by ID (works on KDE Wayland)
+            result = subprocess.run(['kdotool', 'windowactivate', self.captured_window_id],
+                                  capture_output=True, text=True, timeout=3)
+
+            if result.returncode == 0:
+                print(f"✅ Successfully focused window: {self.captured_window_name}")
+                time.sleep(0.2)  # Brief delay for window to receive focus
+                return True
+            else:
+                print(f"⚠️  kdotool failed (return code {result.returncode}), using fallback")
+                # Fallback to Alt+Tab if kdotool fails
+                subprocess.run(['ydotool', 'key', 'alt+Tab'], timeout=1)
+                time.sleep(0.2)
+                print(f"Used Alt+Tab fallback")
+                return True
+
+        except FileNotFoundError:
+            print(f"⚠️  kdotool not available, using Alt+Tab fallback")
+            try:
+                subprocess.run(['ydotool', 'key', 'alt+Tab'], timeout=1)
+                time.sleep(0.2)
+                print(f"Used Alt+Tab fallback")
+                return True
+            except Exception as e:
+                print(f"Both kdotool and Alt+Tab failed: {e}")
+                return True  # Continue anyway
+        except Exception as e:
+            print(f"Window focusing failed: {e}")
+            return True  # Continue anyway
+
+    def _focus_window_kdotool(self):
+        """Focus window using kdotool (works on both X11 and Wayland)"""
         try:
-            subprocess.run(['xdotool', 'windowactivate', self.captured_window_id], check=True)
+            subprocess.run(['kdotool', 'windowactivate', self.captured_window_id], check=True)
             time.sleep(0.1)  # Brief delay for window to receive focus
             return True
         except subprocess.CalledProcessError as e:
-            print(f"Error focusing X11 window {self.captured_window_id}: {e}")
+            print(f"Error focusing window {self.captured_window_id}: {e}")
             return False
 
     def _focus_wayland_window(self):
-        """Focus window on Wayland using compositor-specific methods and fallbacks"""
+        """Focus window on Wayland with verification"""
         try:
             if self.captured_window_id in ["wayland_active", "gnome_active"]:
                 return True  # Already using active window approach
 
             compositor = getattr(self, 'captured_compositor', 'unknown')
-            print(f"Attempting to focus {self.captured_window_name} on {compositor}")
+            window_name = getattr(self, 'captured_window_name', 'Unknown')
+            print(f"Attempting to focus '{window_name}' on {compositor}")
 
-            # Method 1: Compositor-specific focus commands
-            focus_success = self._try_compositor_focus(compositor)
-            if focus_success:
-                print(f"Successfully focused window using {compositor} method")
-                return True
+            # Get current active window for comparison
+            current_active = self._get_current_active_window()
+            print(f"Current active window: {current_active}")
 
-            # Method 2: KWin scripting approach (for KDE)
-            if compositor == 'kde' or 'kde' in compositor:
-                kwin_success = self._try_kwin_scripting_focus()
-                if kwin_success:
-                    print("Successfully focused window using KWin scripting")
+            # Strategy 1: Direct window focusing by stored info
+            if self._try_direct_window_focus():
+                if self._verify_focus_changed(current_active, window_name):
+                    print(f"✅ Successfully focused {window_name}")
                     return True
 
-            # Method 3: Input simulation fallback (Alt+Tab cycling)
-            if self.captured_window_name and self.captured_window_name != "Unknown Window":
-                input_success = self._try_input_focus()
-                if input_success:
-                    print("Successfully focused window using input simulation")
+            # Strategy 2: Search and focus by window title
+            if self._try_focus_by_title(window_name):
+                if self._verify_focus_changed(current_active, window_name):
+                    print(f"✅ Successfully focused {window_name} by title")
                     return True
 
-            print(f"Could not focus Wayland window {self.captured_window_name}")
+            # Strategy 3: Use input simulation to switch windows
+            if self._try_intelligent_window_switching(window_name):
+                if self._verify_focus_changed(current_active, window_name):
+                    print(f"✅ Successfully focused {window_name} via input simulation")
+                    return True
+
+            print(f"❌ Failed to focus window '{window_name}' - all methods failed")
             return False
 
         except Exception as e:
             print(f"Error in Wayland window focus: {e}")
             return False
 
+    def _get_current_active_window(self):
+        """Get the title of the currently active window"""
+        try:
+            # Try kdotool (works on KDE Wayland)
+            result = subprocess.run(['kdotool', 'getactivewindow'],
+                                   capture_output=True, text=True, check=True, timeout=2)
+            window_id = result.stdout.strip()
+            if window_id:
+                name_result = subprocess.run(['kdotool', 'getwindowname', window_id],
+                                           capture_output=True, text=True, check=True, timeout=2)
+                return name_result.stdout.strip()
+        except:
+            pass
+
+        # Fallback: Use KWin script
+        try:
+            script_content = """
+var active = workspace.activeClient;
+if (active) {
+    console.log("ACTIVE:" + active.caption);
+}
+"""
+            script_path = "/tmp/check_active.js"
+            with open(script_path, 'w') as f:
+                f.write(script_content)
+
+            for qdbus_cmd in ['qdbus6', 'qdbus-qt5', 'qdbus']:
+                try:
+                    subprocess.run([qdbus_cmd, 'org.kde.KWin', '/Scripting',
+                                  'org.kde.kwin.Scripting.loadScript', script_path],
+                                 timeout=2, check=True)
+                    break
+                except:
+                    continue
+        except:
+            pass
+
+        return "Unknown Active Window"
+
+    def _verify_focus_changed(self, old_active, expected_title):
+        """Verify that focus actually changed to the expected window"""
+        try:
+            time.sleep(0.3)  # Give window manager time to change focus
+            new_active = self._get_current_active_window()
+
+            # Check if the new active window contains our expected title
+            if expected_title and expected_title != "Unknown Window":
+                return expected_title.lower() in new_active.lower() or new_active.lower() in expected_title.lower()
+
+            # Fallback: check if active window changed at all
+            return new_active != old_active
+        except:
+            return False
+
+    def _try_direct_window_focus(self):
+        """Try to focus using stored window ID/info"""
+        compositor = getattr(self, 'captured_compositor', 'unknown')
+
+        # Try kdotool for any window (works on both X11 and Wayland)
+        if self.captured_window_id:
+            try:
+                subprocess.run(['kdotool', 'windowactivate', self.captured_window_id],
+                             check=True, timeout=3)
+                return True
+            except:
+                pass
+
+        # For KDE, try compositor focus
+        return self._try_compositor_focus(compositor)
+
+    def _try_focus_by_title(self, window_title):
+        """Try to focus window by searching for its title"""
+        # For "KDE Window" capture, we can't search by title since we don't have the real title
+        # Instead, just return True to indicate we should try input simulation
+        if window_title == "KDE Window":
+            print(f"Using input simulation for KDE Window capture")
+            return False  # Skip to input simulation
+
+        return False  # For now, just use input simulation
+
+    def _try_intelligent_window_switching(self, target_title):
+        """Use input simulation - but avoid typing when we don't have real window titles"""
+        try:
+            print(f"Trying simple window switching for '{target_title}'")
+
+            # For generic "KDE Window" capture, we can't search by title
+            # Just do a simple Alt+Tab to switch to previous window
+            if target_title == "KDE Window":
+                try:
+                    # Simple Alt+Tab to switch to the previously active window
+                    subprocess.run(['ydotool', 'key', 'alt+Tab'], timeout=2)
+                    time.sleep(0.3)
+                    return True
+                except Exception as e:
+                    print(f"Simple Alt+Tab failed: {e}")
+                    # Alt released automatically with proper syntax
+                    return False
+
+            # For windows with real titles, we could do more sophisticated searching
+            # But for now, just use simple Alt+Tab
+            try:
+                # Just switch to next window
+                subprocess.run(['ydotool', 'key', 'alt+Tab'], timeout=2)
+                time.sleep(0.3)
+                return True
+            except Exception as e:
+                print(f"Alt+Tab switching failed: {e}")
+                # Alt released automatically with proper syntax
+
+        except Exception as e:
+            print(f"Window switching failed: {e}")
+
+        return False
+
     def _try_compositor_focus(self, compositor):
-        """Try compositor-specific focus methods"""
+        """Try compositor-specific focus methods (simplified for new system)"""
         try:
             # Sway
             if compositor == 'sway':
@@ -528,89 +669,6 @@ class DunkingBird:
 
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
             pass
-
-        return False
-
-    def _try_kwin_scripting_focus(self):
-        """Use KWin scripting to focus window by title"""
-        try:
-            if not self.captured_window_name or self.captured_window_name == "Unknown Window":
-                return False
-
-            # Create a temporary KWin script to focus window by title
-            script_content = f"""
-// Focus window by title
-var clients = workspace.clientList();
-for (var i = 0; i < clients.length; i++) {{
-    var client = clients[i];
-    if (client.caption.includes("{self.captured_window_name}")) {{
-        workspace.activateClient(client);
-        break;
-    }}
-}}
-"""
-
-            script_path = "/tmp/focus_by_title.js"
-            with open(script_path, 'w') as f:
-                f.write(script_content)
-
-            # Load and execute the script
-            for qdbus_cmd in ['qdbus6', 'qdbus-qt5', 'qdbus']:
-                try:
-                    result = subprocess.run([qdbus_cmd, 'org.kde.KWin', '/Scripting',
-                                          'org.kde.kwin.Scripting.loadScript', script_path],
-                                          capture_output=True, text=True, timeout=5)
-                    if result.returncode == 0:
-                        time.sleep(0.2)  # Give KWin time to execute
-                        # Cleanup
-                        os.remove(script_path)
-                        return True
-                except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
-                    continue
-
-        except Exception as e:
-            print(f"KWin scripting focus error: {e}")
-
-        return False
-
-    def _try_input_focus(self):
-        """Use input simulation to focus window by title"""
-        try:
-            if not self.captured_window_name or self.captured_window_name == "Unknown Window":
-                return False
-
-            print(f"Trying to focus '{self.captured_window_name}' using input simulation")
-
-            # Use Alt+Tab to cycle through windows and find our target
-            # This is a simplified approach - in practice, you'd need more sophisticated matching
-
-            # First, try Super+W (KDE's Present Windows effect) if available
-            try:
-                subprocess.run(['ydotool', 'key', 'Super+W'], timeout=2, check=False)
-                time.sleep(0.5)
-                # Type the window name to search
-                subprocess.run(['ydotool', 'type', self.captured_window_name[:10]], timeout=3, check=False)
-                time.sleep(0.3)
-                # Press Enter to select
-                subprocess.run(['ydotool', 'key', 'Return'], timeout=2, check=False)
-                time.sleep(0.3)
-                return True
-            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-                pass
-
-            # Fallback: Just ensure current window has focus by clicking on it
-            # This is crude but often works
-            try:
-                subprocess.run(['ydotool', 'key', 'alt+Tab'], timeout=2, check=False)
-                time.sleep(0.1)
-                subprocess.run(['ydotool', 'key', 'alt+Tab'], timeout=2, check=False)
-                time.sleep(0.1)
-                return True
-            except:
-                pass
-
-        except Exception as e:
-            print(f"Input focus simulation error: {e}")
 
         return False
 

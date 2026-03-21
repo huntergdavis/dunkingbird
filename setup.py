@@ -43,6 +43,17 @@ class DunkingBirdSetup:
     def info(self, message):
         self.log(f"ℹ️ {message}", Colors.BLUE)
 
+    def check_kdotool_available(self):
+        """Check if kdotool command is available"""
+        try:
+            result = subprocess.run(['kdotool', '--version'],
+                                  capture_output=True, text=True, timeout=5)
+            return result.returncode == 0
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return False
+        except subprocess.CalledProcessError:
+            return True  # Command exists but version flag may not work
+
     def check_ydotool_available(self):
         """Check if ydotool command is available using a better method"""
         try:
@@ -125,6 +136,12 @@ class DunkingBirdSetup:
         else:
             self.success("ydotool command available")
 
+        # Check kdotool availability (for KDE Wayland)
+        if not self.check_kdotool_available():
+            self.issues.append("kdotool command not found or not working")
+        else:
+            self.success("kdotool command available")
+
         # Check ydotool daemon
         daemon_status = self.check_ydotool_daemon()
         if daemon_status == "not_running":
@@ -176,6 +193,17 @@ class DunkingBirdSetup:
                 fix_results.append("✅ Installed ydotool packages")
             except Exception as e:
                 fix_results.append(f"❌ Failed to install ydotool: {e}")
+
+        # Install kdotool if missing (for KDE Wayland)
+        if any("kdotool command not found" in issue for issue in self.issues):
+            self.info("Installing kdotool...")
+            try:
+                subprocess.run(['sudo', 'apt', 'update'], check=False)
+                subprocess.run(['sudo', 'apt', 'install', '-y', 'kdotool'],
+                              check=False)
+                fix_results.append("✅ Installed kdotool package")
+            except Exception as e:
+                fix_results.append(f"❌ Failed to install kdotool: {e}")
 
         # Start ydotool daemon
         if any("daemon not running" in issue for issue in self.issues):
