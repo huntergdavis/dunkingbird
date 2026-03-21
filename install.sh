@@ -135,11 +135,48 @@ install_python_deps() {
         info "Installing Python packages system-wide..."
     fi
 
-    # Install pynput (for X11 fallback)
+    # Install Python packages from requirements.txt
+    if [ -f "requirements.txt" ]; then
+        info "Installing Python packages from requirements.txt..."
+        if [ "$use_venv" = true ]; then
+            pip install -r requirements.txt &>> "$INSTALL_LOG" || warning "Some Python packages failed to install in venv"
+        else
+            python3 -m pip install --user -r requirements.txt &>> "$INSTALL_LOG" || warning "Some Python packages failed to install for user"
+        fi
+    fi
+
+    # Verify pynput installation specifically (critical for X11 fallback)
+    info "Verifying pynput installation..."
+    local pynput_test_result=""
     if [ "$use_venv" = true ]; then
-        pip install pynput &>> "$INSTALL_LOG" || warning "Failed to install pynput in venv"
+        pynput_test_result=$(python3 -c "import pynput; print('OK')" 2>&1 || echo "FAILED")
     else
-        python3 -m pip install --user pynput &>> "$INSTALL_LOG" || warning "Failed to install pynput for user"
+        pynput_test_result=$(python3 -c "import pynput; print('OK')" 2>&1 || echo "FAILED")
+    fi
+
+    if [[ "$pynput_test_result" == *"OK"* ]]; then
+        success "pynput installed and working"
+    else
+        error "pynput installation failed - trying fallback methods..."
+
+        # Fallback 1: Try pip3 directly
+        if command -v pip3 >/dev/null; then
+            info "Trying pip3 fallback installation..."
+            if [ "$use_venv" = true ]; then
+                pip3 install pynput &>> "$INSTALL_LOG" || true
+            else
+                pip3 install --user pynput &>> "$INSTALL_LOG" || true
+            fi
+        fi
+
+        # Final verification
+        if python3 -c "import pynput" &>/dev/null; then
+            success "pynput installed successfully via fallback"
+        else
+            error "CRITICAL: Could not install pynput!"
+            error "X11 keyboard automation will not work"
+            error "Please install manually: pip3 install --user pynput"
+        fi
     fi
 
     success "Python dependencies configured"

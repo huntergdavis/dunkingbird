@@ -11,8 +11,29 @@ import time
 import subprocess
 import os
 import stat
-from pynput import keyboard
-from pynput.keyboard import Key, Listener
+# Import pynput with error handling
+try:
+    from pynput import keyboard
+    from pynput.keyboard import Key, Listener
+    PYNPUT_AVAILABLE = True
+except ImportError:
+    PYNPUT_AVAILABLE = False
+    # Define dummy classes for when pynput is not available
+    class Key:
+        pass
+
+    class Listener:
+        def __init__(self, *args, **kwargs):
+            pass
+        def start(self):
+            pass
+        def stop(self):
+            pass
+
+    class keyboard:
+        @staticmethod
+        def press_and_release(*args):
+            pass
 
 
 class DunkingBird:
@@ -675,11 +696,27 @@ if (active) {
     def perform_runtime_checks(self):
         """Perform minimal runtime checks"""
         try:
-            # Just check if ydotool is available - if not, show helpful message
+            warnings = []
+
+            # Check if ydotool is available (primary input method for Wayland)
             if not self._check_ydotool_available():
-                self.status_var.set("⚠️ ydotool not found - run ./setup.py to fix")
+                warnings.append("ydotool not found")
+
+            # Check if pynput is available (X11 fallback method)
+            if not PYNPUT_AVAILABLE:
+                warnings.append("pynput not installed")
+                print("Warning: pynput not available - X11 keyboard automation disabled")
+                print("Install with: pip3 install --user pynput")
+
+            # Set status based on findings
+            if warnings:
+                if len(warnings) == 1:
+                    self.status_var.set(f"⚠️ {warnings[0]} - run ./setup.py to fix")
+                else:
+                    self.status_var.set(f"⚠️ Issues found - run ./setup.py to fix")
             else:
                 self.status_var.set("✓ Ready")
+
         except Exception as e:
             # Don't crash on runtime checks
             self.status_var.set("Ready")
@@ -846,6 +883,11 @@ if (active) {
             process = subprocess.run(['xclip', '-selection', 'clipboard'],
                                    input=text, text=True, check=True)
 
+            if not PYNPUT_AVAILABLE:
+                print("Error: pynput not available - X11 keyboard automation disabled")
+                print("Install pynput with: pip3 install --user pynput")
+                return False
+
             # Create keyboard controller
             controller = keyboard.Controller()
 
@@ -868,6 +910,16 @@ if (active) {
         try:
             text_to_send = self.text_area.get(1.0, tk.END).strip()
             if text_to_send:
+                if not PYNPUT_AVAILABLE:
+                    error_msg = ("Error: pynput not available!\n\n"
+                               "X11 keyboard automation requires pynput.\n"
+                               "Please install it with:\n"
+                               "pip3 install --user pynput\n\n"
+                               "Or use the installation script to fix dependencies.")
+                    messagebox.showerror("Missing Dependency", error_msg)
+                    print("Error: pynput not available - cannot send text via X11 keyboard automation")
+                    return
+
                 # Create a keyboard controller
                 controller = keyboard.Controller()
 

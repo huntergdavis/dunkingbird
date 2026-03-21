@@ -105,8 +105,8 @@ install_dependencies() {
         "xclip"
         "xdotool"
         "curl"
-        "timeout"
-        "pgrep"
+        "coreutils"
+        "procps"
     )
 
     export DEBIAN_FRONTEND=noninteractive
@@ -173,13 +173,57 @@ setup_ydotool() {
 setup_python() {
     info "Setting up Python environment..."
 
-    # Try pip install with fallbacks
-    if command -v pip3 >/dev/null; then
-        pip3 install --user pynput 2>/dev/null || true
+    # Install Python packages from requirements.txt if available
+    if [ -f "requirements.txt" ]; then
+        info "Installing Python packages from requirements.txt..."
+        if command -v python3 >/dev/null && python3 -m pip --version >/dev/null 2>&1; then
+            python3 -m pip install --user -r requirements.txt 2>/dev/null || true
+        elif command -v pip3 >/dev/null; then
+            pip3 install --user -r requirements.txt 2>/dev/null || true
+        fi
     fi
 
-    if command -v python3 >/dev/null && python3 -m pip --version >/dev/null 2>&1; then
-        python3 -m pip install --user pynput 2>/dev/null || true
+    # Verify critical pynput installation (required for X11 fallback input automation)
+    info "Verifying pynput installation..."
+
+    local pynput_working=false
+
+    # Test if pynput can be imported
+    if python3 -c "import pynput" 2>/dev/null; then
+        success "pynput is installed and working"
+        pynput_working=true
+    else
+        warning "pynput not found, installing manually..."
+
+        # Try pip3 first
+        if command -v pip3 >/dev/null; then
+            if pip3 install --user pynput 2>/dev/null; then
+                info "Installed via pip3, testing..."
+                if python3 -c "import pynput" 2>/dev/null; then
+                    success "pynput installed and verified via pip3"
+                    pynput_working=true
+                fi
+            fi
+        fi
+
+        # Try python3 -m pip if pip3 failed
+        if [ "$pynput_working" = false ] && command -v python3 >/dev/null && python3 -m pip --version >/dev/null 2>&1; then
+            if python3 -m pip install --user pynput 2>/dev/null; then
+                info "Installed via python3 -m pip, testing..."
+                if python3 -c "import pynput" 2>/dev/null; then
+                    success "pynput installed and verified via python3 -m pip"
+                    pynput_working=true
+                fi
+            fi
+        fi
+
+        # Final check
+        if [ "$pynput_working" = false ]; then
+            error "CRITICAL: Could not install pynput!"
+            error "X11 keyboard automation will not work properly"
+            error "Please install manually after installation: pip3 install --user pynput"
+            error "Then test with: python3 -c 'import pynput'"
+        fi
     fi
 
     success "Python environment ready"
