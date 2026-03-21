@@ -1,6 +1,6 @@
 # Dunking Bird
 
-![Dunking Bird](dunkingbird.png)
+<img src="dunkingbird.png" alt="Dunking Bird" width="50%">
 
 A simple automation tool that sends text to the currently active window at regular intervals. Perfect for keeping coding agents engaged with prompts like "continue" or "keep going".
 
