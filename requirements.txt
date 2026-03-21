@@ -1,8 +1,102 @@
-# Python dependencies
-# Note: pynput is kept for potential X11 compatibility but not used on Wayland
+# Dunking Bird - Automated Text Sender
+# Requirements file for all dependencies
 
-# System dependencies (install with apt):
-# - python3-tk (tkinter GUI)
-# - ydotool (Wayland input automation)
-# - xclip (clipboard operations)
-# - xdotool (X11 compatibility, optional)
+# =============================================================================
+# PYTHON PACKAGES (pip install -r requirements.txt)
+# =============================================================================
+
+# Core GUI and input automation
+pynput>=1.7.0                   # Keyboard automation (X11 fallback only)
+
+# =============================================================================
+# SYSTEM DEPENDENCIES (install via package manager)
+# =============================================================================
+#
+# For Debian/Ubuntu systems, run:
+#   sudo apt update && sudo apt install -y python3-tk ydotool xclip xdotool python3-venv
+#
+# Required packages:
+# - python3-tk          : Tkinter GUI framework (REQUIRED)
+# - ydotool             : Wayland input automation (PRIMARY method)
+# - python3-venv        : Python virtual environments (recommended)
+#
+# Optional packages:
+# - xclip               : X11 clipboard operations (fallback)
+# - xdotool             : X11 window management (fallback)
+# - curl                : For downloading install script
+#
+# =============================================================================
+# DAEMON AND SERVICE REQUIREMENTS
+# =============================================================================
+#
+# ydotool daemon:
+# - Must be running for Wayland input simulation
+# - Usually started automatically by install script
+# - Manual start: sudo ydotoold &
+# - Socket: /tmp/.ydotool_socket (needs write permissions)
+#
+# User permissions:
+# - User should be in 'input' group for ydotool access
+# - Command to add: sudo usermod -a -G input $USER
+# - May require logout/login to take effect
+#
+# =============================================================================
+# INSTALLATION METHODS
+# =============================================================================
+#
+# Method 1 - Automated installer (recommended):
+#   curl -fsSL https://raw.githubusercontent.com/user/repo/main/install.sh | bash
+#
+# Method 2 - Manual installation:
+#   sudo apt update
+#   sudo apt install -y python3-tk ydotool xclip xdotool python3-venv
+#   python3 -m venv venv
+#   source venv/bin/activate
+#   pip install -r requirements.txt
+#   sudo ydotoold &
+#   python3 dunking_bird.py
+#
+# Method 3 - System-wide (no venv):
+#   sudo apt update
+#   sudo apt install -y python3-tk ydotool xclip xdotool
+#   pip3 install --user pynput
+#   sudo ydotoold &
+#   python3 dunking_bird.py
+#
+# =============================================================================
+# COMPATIBILITY
+# =============================================================================
+#
+# Supported environments:
+# - Ubuntu 20.04+ (recommended)
+# - Debian 10+ (recommended)
+# - Other apt-based distributions
+#
+# Desktop environments:
+# - GNOME (Wayland/X11)
+# - KDE (Wayland/X11)
+# - Sway (Wayland)
+# - i3 (X11)
+# - Other X11/Wayland compositors
+#
+# =============================================================================
+# TROUBLESHOOTING
+# =============================================================================
+#
+# Common issues:
+# 1. "ydotool: No such device" - daemon not running
+#    Solution: sudo ydotoold &
+#
+# 2. "Permission denied" on socket
+#    Solution: sudo chmod 666 /tmp/.ydotool_socket
+#
+# 3. "ModuleNotFoundError: tkinter"
+#    Solution: sudo apt install python3-tk
+#
+# 4. Input not working on Wayland
+#    Solution: Check user is in input group, restart session
+#
+# 5. Window capture not working
+#    Solution: Install xdotool for X11 or ensure swaymsg for Sway
+#
+# For more help, see README.md or run ./install.sh
