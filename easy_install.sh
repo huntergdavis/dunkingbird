@@ -101,6 +101,7 @@ install_dependencies() {
         "python3-venv"
         "python3-tk"
         "ydotool"
+        "ydotoold"
         "xclip"
         "xdotool"
         "curl"

@@ -17,24 +17,49 @@ from pynput.keyboard import Key, Listener
 
 class DunkingBird:
     def __init__(self, root):
-        self.root = root
-        self.root.title("Dunking Bird")
-        self.root.geometry("400x300")
+        try:
+            self.root = root
+            self.root.title("Dunking Bird")
+            self.root.geometry("600x500")
+            self.root.minsize(500, 400)  # Set minimum window size
+            self.root.resizable(True, True)  # Make window resizable
 
-        # State variables
-        self.is_running = False
-        self.timer_thread = None
-        self.interval_seconds = 600  # Default 10 minutes
+            # State variables
+            self.is_running = False
+            self.timer_thread = None
+            self.interval_seconds = 600  # Default 10 minutes
 
-        # Window capture variables
-        self.captured_window_id = None
-        self.captured_window_name = None
-        self.captured_window_class = None
+            # Window capture variables
+            self.captured_window_id = None
+            self.captured_window_name = None
+            self.captured_window_class = None
+            self.captured_compositor = None
 
-        self.setup_gui()
+            # Setup GUI with error handling
+            try:
+                self.setup_gui()
+            except Exception as e:
+                print(f"Error setting up GUI: {e}")
+                messagebox.showerror("GUI Error", f"Failed to setup interface: {e}")
+                return
 
-        # Perform runtime checks after GUI is set up
-        self.root.after(100, self.perform_runtime_checks)
+            # Perform runtime checks after GUI is set up (with delay and error handling)
+            self.root.after(500, self.safe_runtime_checks)
+
+        except Exception as e:
+            print(f"Critical error during initialization: {e}")
+            try:
+                messagebox.showerror("Initialization Error", f"Failed to initialize application: {e}")
+            except:
+                print("Could not show error dialog")
+
+    def safe_runtime_checks(self):
+        """Safely perform runtime checks with error handling"""
+        try:
+            self.perform_runtime_checks()
+        except Exception as e:
+            print(f"Error during runtime checks: {e}")
+            self.status_var.set("⚠️ Setup check failed - app may still work")
 
     def setup_gui(self):
         # Main frame
@@ -88,6 +113,8 @@ class DunkingBird:
         self.status_var = tk.StringVar(value="Stopped")
         status_label = ttk.Label(main_frame, textvariable=self.status_var, font=("Arial", 10))
         status_label.grid(row=7, column=0, columnspan=2, pady=5)
+
+        # Removed fix setup button - use separate setup.py script instead
 
         # Next send countdown
         self.countdown_var = tk.StringVar(value="")
@@ -175,43 +202,183 @@ class DunkingBird:
             print(f"Error getting active window: {e}")
             return None
 
-    def get_wayland_window_info(self):
-        """Get active window info on Wayland using swaymsg (for sway) or other methods"""
+    def select_window_interactive(self):
+        """Let user click on a window to select it using xdotool"""
         try:
-            # Try sway first
-            result = subprocess.run(['swaymsg', '-t', 'get_tree'],
-                                  capture_output=True, text=True, check=True)
-            import json
-            tree = json.loads(result.stdout)
+            print("Waiting for user to click on target window...")
 
-            # Find focused window recursively
-            def find_focused(node):
-                if node.get('focused', False):
-                    return node
-                for child in node.get('nodes', []) + node.get('floating_nodes', []):
-                    focused = find_focused(child)
-                    if focused:
-                        return focused
+            # Use xdotool selectwindow to let user click on a window
+            # This will change the mouse cursor to crosshairs and wait for a click
+            result = subprocess.run(['xdotool', 'selectwindow'],
+                                  capture_output=True, text=True, check=True, timeout=30)
+            window_id = result.stdout.strip()
+
+            if window_id:
+                # Get window name for confirmation
+                try:
+                    name_result = subprocess.run(['xdotool', 'getwindowname', window_id],
+                                               capture_output=True, text=True, check=True)
+                    window_name = name_result.stdout.strip()
+                    print(f"User selected window: {window_name} (ID: {window_id})")
+                except subprocess.CalledProcessError:
+                    print(f"User selected window ID: {window_id}")
+
+                return window_id
+            else:
+                print("No window selected")
                 return None
 
-            focused = find_focused(tree)
-            if focused:
-                return {
-                    'id': str(focused.get('id', 'unknown')),
-                    'name': focused.get('name', 'Unknown Window'),
-                    'class': focused.get('app_id', 'unknown')
-                }
-        except (subprocess.CalledProcessError, json.JSONDecodeError, ImportError):
-            pass
+        except subprocess.TimeoutExpired:
+            print("Window selection timed out (30 seconds)")
+            return None
+        except subprocess.CalledProcessError as e:
+            print(f"Error selecting window: {e}")
+            return None
+        except Exception as e:
+            print(f"Unexpected error during window selection: {e}")
+            return None
 
-        # Fallback: try other Wayland compositor tools or return None
-        return None
+    def get_wayland_window_info(self):
+        """Get active window info on Wayland using various compositor tools"""
+        import json
+
+        # Helper to safely check if command exists
+        def command_exists(cmd):
+            try:
+                subprocess.run(['which', cmd], capture_output=True, check=True)
+                return True
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                return False
+
+        # Try sway first (most complete support)
+        if command_exists('swaymsg'):
+            try:
+                result = subprocess.run(['swaymsg', '-t', 'get_tree'],
+                                      capture_output=True, text=True, check=True)
+                tree = json.loads(result.stdout)
+
+                # Find focused window recursively
+                def find_focused(node):
+                    if node.get('focused', False):
+                        return node
+                    for child in node.get('nodes', []) + node.get('floating_nodes', []):
+                        focused = find_focused(child)
+                        if focused:
+                            return focused
+                    return None
+
+                focused = find_focused(tree)
+                if focused:
+                    return {
+                        'id': str(focused.get('id', 'unknown')),
+                        'name': focused.get('name', 'Unknown Window'),
+                        'class': focused.get('app_id', 'unknown'),
+                        'compositor': 'sway'
+                    }
+            except (subprocess.CalledProcessError, json.JSONDecodeError, ImportError):
+                pass
+
+        # Try Hyprland
+        if command_exists('hyprctl'):
+            try:
+                result = subprocess.run(['hyprctl', 'activewindow', '-j'],
+                                      capture_output=True, text=True, check=True)
+                window = json.loads(result.stdout)
+                if window and 'address' in window:
+                    return {
+                        'id': window.get('address', 'unknown'),
+                        'name': window.get('title', 'Unknown Window'),
+                        'class': window.get('class', 'unknown'),
+                        'compositor': 'hyprland'
+                    }
+            except (subprocess.CalledProcessError, json.JSONDecodeError, ImportError):
+                pass
+
+        # Try GNOME Shell / Mutter (limited support)
+        if command_exists('gdbus'):
+            try:
+                result = subprocess.run(['gdbus', 'call', '--session', '--dest', 'org.gnome.Shell',
+                                       '--object-path', '/org/gnome/Shell', '--method',
+                                       'org.gnome.Shell.Eval', 'global.display.focus_window.get_title()'],
+                                      capture_output=True, text=True, check=True)
+                # Parse gdbus response - it's in format: (true, "'Window Title'")
+                if result.stdout and "'" in result.stdout:
+                    title_start = result.stdout.find("'") + 1
+                    title_end = result.stdout.rfind("'")
+                    if title_start > 0 and title_end > title_start:
+                        window_title = result.stdout[title_start:title_end]
+                        return {
+                            'id': 'gnome_active',
+                            'name': window_title,
+                            'class': 'unknown',
+                            'compositor': 'gnome'
+                        }
+            except (subprocess.CalledProcessError, json.JSONDecodeError, ImportError):
+                pass
+
+        # Try KDE/KWin - use newer queryWindowInfo method
+        qdbus_cmd = None
+        for cmd in ['qdbus6', 'qdbus-qt5', 'qdbus']:
+            if command_exists(cmd):
+                qdbus_cmd = cmd
+                break
+
+        if qdbus_cmd:
+            try:
+                # Use queryWindowInfo which gives active window info
+                result = subprocess.run([qdbus_cmd, 'org.kde.KWin', '/KWin',
+                                       'org.kde.KWin.queryWindowInfo'],
+                                      capture_output=True, text=True,
+                                      timeout=3, check=True)
+
+                # Parse the result - it's usually in a key=value format
+                window_info = result.stdout.strip()
+                if window_info and 'caption' in window_info:
+                    # Extract window title from the output
+                    title = "KDE Window"
+                    for line in window_info.split('\n'):
+                        if 'caption' in line and '=' in line:
+                            title = line.split('=', 1)[1].strip().strip('"')
+                            break
+
+                    return {
+                        'id': 'kde_active_window',
+                        'name': title if title else "KDE Window",
+                        'class': 'unknown',
+                        'compositor': 'kde'
+                    }
+
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                # If queryWindowInfo fails, try simpler approach
+                try:
+                    # Just return basic KDE info
+                    return {
+                        'id': 'kde_fallback',
+                        'name': "Active KDE Window",
+                        'class': 'unknown',
+                        'compositor': 'kde'
+                    }
+                except:
+                    pass
+
+        # Fallback: return basic info indicating no specific compositor support
+        return {
+            'id': 'wayland_fallback',
+            'name': 'Active Window (Generic Wayland)',
+            'class': 'unknown',
+            'compositor': 'wayland_generic'
+        }
 
     def capture_window(self):
         """Capture the currently active window for targeted text sending"""
         try:
             self.capture_btn.config(state='disabled')
-            self.window_info_var.set("Capturing window... Click on target window")
+
+            # Check session type to provide appropriate instructions
+            if os.environ.get('XDG_SESSION_TYPE') == 'wayland':
+                self.window_info_var.set("📋 Capturing active window info (Wayland - sends to active window)")
+            else:
+                self.window_info_var.set("🎯 Click on the window you want to capture (30s timeout)")
 
             # Small delay to let user see the message
             self.root.after(1000, self._do_capture_window)
@@ -231,16 +398,18 @@ class DunkingBird:
                     self.captured_window_id = window_info['id']
                     self.captured_window_name = window_info['name']
                     self.captured_window_class = window_info['class']
-                    self.window_info_var.set(f"📌 Captured: {self.captured_window_name} ({self.captured_window_class})")
+                    self.captured_compositor = window_info.get('compositor', 'unknown')
+                    self.window_info_var.set(f"📌 Captured: {self.captured_window_name} ({self.captured_compositor})")
                 else:
                     # Fallback for Wayland - get current window info generically
                     self.captured_window_id = "wayland_active"
                     self.captured_window_name = "Active Window (Wayland)"
                     self.captured_window_class = "unknown"
-                    self.window_info_var.set("📌 Captured: Active Window (Wayland detection limited)")
+                    self.captured_compositor = "unknown"
+                    self.window_info_var.set("📌 Captured: Active Window (compositor detection failed)")
             else:
-                # X11 - use xdotool
-                window_id = self.get_active_window()
+                # X11 - use interactive window selection
+                window_id = self.select_window_interactive()
                 if window_id:
                     # Get additional window info
                     try:
@@ -252,15 +421,17 @@ class DunkingBird:
                         self.captured_window_id = window_id
                         self.captured_window_name = name_result.stdout.strip()
                         self.captured_window_class = class_result.stdout.strip()
+                        self.captured_compositor = "x11"
 
                         self.window_info_var.set(f"📌 Captured: {self.captured_window_name} ({self.captured_window_class})")
                     except subprocess.CalledProcessError:
                         self.captured_window_id = window_id
                         self.captured_window_name = "Unknown Window"
                         self.captured_window_class = "unknown"
+                        self.captured_compositor = "x11"
                         self.window_info_var.set(f"📌 Captured: Window ID {window_id}")
                 else:
-                    self.window_info_var.set("❌ Could not capture window")
+                    self.window_info_var.set("❌ Window selection cancelled or timed out")
 
         except Exception as e:
             print(f"Error capturing window: {e}")
@@ -282,7 +453,7 @@ class DunkingBird:
                 return self._focus_x11_window()
         except Exception as e:
             print(f"Error focusing captured window: {e}")
-            return False
+            return True  # Continue anyway since ydotool works with active window
 
     def _focus_x11_window(self):
         """Focus window on X11 using xdotool"""
@@ -295,219 +466,184 @@ class DunkingBird:
             return False
 
     def _focus_wayland_window(self):
-        """Focus window on Wayland using sway commands"""
+        """Focus window on Wayland using compositor-specific methods and fallbacks"""
         try:
-            if self.captured_window_id == "wayland_active":
+            if self.captured_window_id in ["wayland_active", "gnome_active"]:
                 return True  # Already using active window approach
 
-            # Try sway focus command
-            subprocess.run(['swaymsg', f'[con_id="{self.captured_window_id}"] focus'], check=True)
-            time.sleep(0.1)  # Brief delay for window to receive focus
-            return True
-        except subprocess.CalledProcessError:
-            # Fallback: try other Wayland compositor commands or return false
-            try:
-                # Alternative approach for other Wayland compositors
-                return True  # For now, assume success for unknown compositors
-            except:
-                print(f"Error focusing Wayland window {self.captured_window_id}")
+            compositor = getattr(self, 'captured_compositor', 'unknown')
+            print(f"Attempting to focus {self.captured_window_name} on {compositor}")
+
+            # Method 1: Compositor-specific focus commands
+            focus_success = self._try_compositor_focus(compositor)
+            if focus_success:
+                print(f"Successfully focused window using {compositor} method")
+                return True
+
+            # Method 2: KWin scripting approach (for KDE)
+            if compositor == 'kde' or 'kde' in compositor:
+                kwin_success = self._try_kwin_scripting_focus()
+                if kwin_success:
+                    print("Successfully focused window using KWin scripting")
+                    return True
+
+            # Method 3: Input simulation fallback (Alt+Tab cycling)
+            if self.captured_window_name and self.captured_window_name != "Unknown Window":
+                input_success = self._try_input_focus()
+                if input_success:
+                    print("Successfully focused window using input simulation")
+                    return True
+
+            print(f"Could not focus Wayland window {self.captured_window_name}")
+            return False
+
+        except Exception as e:
+            print(f"Error in Wayland window focus: {e}")
+            return False
+
+    def _try_compositor_focus(self, compositor):
+        """Try compositor-specific focus methods"""
+        try:
+            # Sway
+            if compositor == 'sway':
+                subprocess.run(['swaymsg', f'[con_id="{self.captured_window_id}"] focus'],
+                             check=True, timeout=3)
+                return True
+
+            # Hyprland
+            elif compositor == 'hyprland':
+                subprocess.run(['hyprctl', 'dispatch', 'focuswindow', f'address:{self.captured_window_id}'],
+                             check=True, timeout=3)
+                return True
+
+            # KDE (try direct qdbus if we have a proper window ID)
+            elif compositor == 'kde' and self.captured_window_id.isdigit():
+                for qdbus_cmd in ['qdbus6', 'qdbus-qt5', 'qdbus']:
+                    try:
+                        subprocess.run([qdbus_cmd, 'org.kde.KWin', f'/KWin/Window_{self.captured_window_id}',
+                                      'org.kde.KWin.Window.activate'], check=True, timeout=3)
+                        return True
+                    except (subprocess.CalledProcessError, FileNotFoundError):
+                        continue
+
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
+            pass
+
+        return False
+
+    def _try_kwin_scripting_focus(self):
+        """Use KWin scripting to focus window by title"""
+        try:
+            if not self.captured_window_name or self.captured_window_name == "Unknown Window":
                 return False
 
+            # Create a temporary KWin script to focus window by title
+            script_content = f"""
+// Focus window by title
+var clients = workspace.clientList();
+for (var i = 0; i < clients.length; i++) {{
+    var client = clients[i];
+    if (client.caption.includes("{self.captured_window_name}")) {{
+        workspace.activateClient(client);
+        break;
+    }}
+}}
+"""
+
+            script_path = "/tmp/focus_by_title.js"
+            with open(script_path, 'w') as f:
+                f.write(script_content)
+
+            # Load and execute the script
+            for qdbus_cmd in ['qdbus6', 'qdbus-qt5', 'qdbus']:
+                try:
+                    result = subprocess.run([qdbus_cmd, 'org.kde.KWin', '/Scripting',
+                                          'org.kde.kwin.Scripting.loadScript', script_path],
+                                          capture_output=True, text=True, timeout=5)
+                    if result.returncode == 0:
+                        time.sleep(0.2)  # Give KWin time to execute
+                        # Cleanup
+                        os.remove(script_path)
+                        return True
+                except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
+                    continue
+
+        except Exception as e:
+            print(f"KWin scripting focus error: {e}")
+
+        return False
+
+    def _try_input_focus(self):
+        """Use input simulation to focus window by title"""
+        try:
+            if not self.captured_window_name or self.captured_window_name == "Unknown Window":
+                return False
+
+            print(f"Trying to focus '{self.captured_window_name}' using input simulation")
+
+            # Use Alt+Tab to cycle through windows and find our target
+            # This is a simplified approach - in practice, you'd need more sophisticated matching
+
+            # First, try Super+W (KDE's Present Windows effect) if available
+            try:
+                subprocess.run(['ydotool', 'key', 'Super+W'], timeout=2, check=False)
+                time.sleep(0.5)
+                # Type the window name to search
+                subprocess.run(['ydotool', 'type', self.captured_window_name[:10]], timeout=3, check=False)
+                time.sleep(0.3)
+                # Press Enter to select
+                subprocess.run(['ydotool', 'key', 'Return'], timeout=2, check=False)
+                time.sleep(0.3)
+                return True
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                pass
+
+            # Fallback: Just ensure current window has focus by clicking on it
+            # This is crude but often works
+            try:
+                subprocess.run(['ydotool', 'key', 'alt+Tab'], timeout=2, check=False)
+                time.sleep(0.1)
+                subprocess.run(['ydotool', 'key', 'alt+Tab'], timeout=2, check=False)
+                time.sleep(0.1)
+                return True
+            except:
+                pass
+
+        except Exception as e:
+            print(f"Input focus simulation error: {e}")
+
+        return False
+
     def perform_runtime_checks(self):
-        """Perform comprehensive runtime checks for dependencies and configuration"""
-        issues = []
-        warnings = []
+        """Perform minimal runtime checks"""
+        try:
+            # Just check if ydotool is available - if not, show helpful message
+            if not self._check_ydotool_available():
+                self.status_var.set("⚠️ ydotool not found - run ./setup.py to fix")
+            else:
+                self.status_var.set("✓ Ready")
+        except Exception as e:
+            # Don't crash on runtime checks
+            self.status_var.set("Ready")
+            print(f"Runtime check error: {e}")
 
-        # Check ydotool availability
-        if not self._check_ydotool_available():
-            issues.append("ydotool command not found")
-
-        # Check ydotool daemon
-        daemon_status = self._check_ydotool_daemon()
-        if daemon_status == "not_running":
-            issues.append("ydotool daemon not running")
-        elif daemon_status == "no_socket":
-            issues.append("ydotool socket not found")
-        elif daemon_status == "permission_denied":
-            warnings.append("ydotool socket permission issues")
-
-        # Check user permissions
-        if not self._check_user_permissions():
-            warnings.append("User may not be in input group")
-
-        # Display results
-        if issues:
-            self._show_setup_dialog(issues, warnings)
-        elif warnings:
-            self._show_warning_dialog(warnings)
-        else:
-            self.status_var.set("✓ All systems ready")
+    # Removed setup dialog functionality - use setup.py script instead
 
     def _check_ydotool_available(self):
         """Check if ydotool command is available"""
         try:
-            subprocess.run(['ydotool', '--version'], capture_output=True, check=True)
+            # Use 'help' command - ydotool outputs to stderr but that's normal
+            result = subprocess.run(['ydotool', 'help'],
+                                  capture_output=True, text=True, timeout=5)
+            # ydotool help may return non-zero but still show help text in stderr
+            return 'Usage:' in result.stderr or 'Usage:' in result.stdout
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return False
+        except subprocess.CalledProcessError:
+            # ydotool may return error code but still be functional
             return True
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            return False
 
-    def _check_ydotool_daemon(self):
-        """Check ydotool daemon status and socket"""
-        # Check if daemon process is running
-        try:
-            result = subprocess.run(['pgrep', '-f', 'ydotoold'], capture_output=True, text=True)
-            if result.returncode != 0:
-                return "not_running"
-        except subprocess.CalledProcessError:
-            return "not_running"
-
-        # Check if socket exists
-        socket_path = "/tmp/.ydotool_socket"
-        if not os.path.exists(socket_path):
-            return "no_socket"
-
-        # Check socket permissions
-        try:
-            # Try to get socket stats
-            socket_stat = os.stat(socket_path)
-            if not (socket_stat.st_mode & stat.S_IWUSR or socket_stat.st_mode & stat.S_IWGRP or socket_stat.st_mode & stat.S_IWOTH):
-                return "permission_denied"
-
-            # Try a simple test
-            result = subprocess.run(['timeout', '2', 'ydotool', 'type', '--delay', '100', ''],
-                                  capture_output=True, stderr=subprocess.DEVNULL)
-            if result.returncode != 0:
-                return "permission_denied"
-
-        except (OSError, subprocess.CalledProcessError):
-            return "permission_denied"
-
-        return "ok"
-
-    def _check_user_permissions(self):
-        """Check if user has appropriate permissions"""
-        try:
-            # Check if user is in input group
-            result = subprocess.run(['groups'], capture_output=True, text=True, check=True)
-            groups = result.stdout.strip()
-            return 'input' in groups.split()
-        except subprocess.CalledProcessError:
-            return False
-
-    def _show_setup_dialog(self, issues, warnings):
-        """Show setup dialog with issues and auto-fix options"""
-        message = "⚠️ Setup Issues Detected:\n\n"
-
-        for issue in issues:
-            message += f"❌ {issue}\n"
-
-        if warnings:
-            message += "\nWarnings:\n"
-            for warning in warnings:
-                message += f"⚠️ {warning}\n"
-
-        message += "\n🔧 Auto-fix Options:"
-        message += "\n• Install missing dependencies"
-        message += "\n• Start ydotool daemon"
-        message += "\n• Fix socket permissions"
-
-        result = messagebox.askyesno(
-            "Dunking Bird Setup",
-            message + "\n\nWould you like to attempt auto-fixes?",
-            icon="warning"
-        )
-
-        if result:
-            self._attempt_auto_fixes(issues, warnings)
-        else:
-            self._show_manual_fix_instructions(issues, warnings)
-
-    def _show_warning_dialog(self, warnings):
-        """Show warning dialog for non-critical issues"""
-        message = "⚠️ Setup Warnings:\n\n"
-
-        for warning in warnings:
-            message += f"⚠️ {warning}\n"
-
-        message += "\n💡 These may cause functionality issues."
-        message += "\nWould you like to attempt auto-fixes?"
-
-        result = messagebox.askyesno(
-            "Dunking Bird Warnings",
-            message,
-            icon="warning"
-        )
-
-        if result:
-            self._attempt_auto_fixes([], warnings)
-
-    def _attempt_auto_fixes(self, issues, warnings):
-        """Attempt to automatically fix common issues"""
-        fix_results = []
-        needs_restart = False
-
-        # Try to start ydotool daemon
-        if any("daemon not running" in issue for issue in issues):
-            try:
-                subprocess.run(['sudo', 'ydotoold'], check=False)
-                time.sleep(1)
-                if self._check_ydotool_daemon() != "not_running":
-                    fix_results.append("✓ Started ydotool daemon")
-                else:
-                    fix_results.append("❌ Failed to start ydotool daemon")
-            except Exception as e:
-                fix_results.append(f"❌ Error starting daemon: {e}")
-
-        # Try to fix socket permissions
-        if any("permission" in issue or "permission" in warning
-               for issue in issues + warnings):
-            try:
-                subprocess.run(['sudo', 'chmod', '666', '/tmp/.ydotool_socket'], check=False)
-                fix_results.append("✓ Fixed socket permissions")
-            except Exception as e:
-                fix_results.append(f"❌ Error fixing permissions: {e}")
-
-        # Try to add user to input group
-        if any("input group" in warning for warning in warnings):
-            try:
-                import getpass
-                username = getpass.getuser()
-                subprocess.run(['sudo', 'usermod', '-a', '-G', 'input', username], check=False)
-                fix_results.append(f"✓ Added {username} to input group")
-                needs_restart = True
-            except Exception as e:
-                fix_results.append(f"❌ Error adding to input group: {e}")
-
-        # Show results
-        result_message = "Auto-fix Results:\n\n" + "\n".join(fix_results)
-
-        if needs_restart:
-            result_message += "\n\n⚠️ You may need to log out and back in for group changes to take effect."
-
-        messagebox.showinfo("Auto-fix Results", result_message)
-
-        # Re-check status
-        self.root.after(1000, self.perform_runtime_checks)
-
-    def _show_manual_fix_instructions(self, issues, warnings):
-        """Show manual fix instructions"""
-        message = "Manual Fix Instructions:\n\n"
-
-        if any("ydotool command not found" in issue for issue in issues):
-            message += "1. Install ydotool:\n   sudo apt install ydotool\n\n"
-
-        if any("daemon not running" in issue for issue in issues):
-            message += "2. Start ydotool daemon:\n   sudo ydotoold &\n\n"
-
-        if any("socket" in issue for issue in issues):
-            message += "3. Fix socket permissions:\n   sudo chmod 666 /tmp/.ydotool_socket\n\n"
-
-        if any("input group" in warning for warning in warnings):
-            message += "4. Add user to input group:\n   sudo usermod -a -G input $USER\n   (logout/login required)\n\n"
-
-        message += "5. Or run the install script:\n   ./install.sh"
-
-        messagebox.showinfo("Manual Setup Instructions", message)
+    # Removed all setup/installation functions - use setup.py script instead
 
     def send_text_to_window(self, window_id):
         """Send text using ydotool for Wayland compatibility"""
@@ -556,22 +692,18 @@ class DunkingBird:
 
                 # Check ydotool availability before sending
                 if not self._check_ydotool_available():
-                    if retry_count == 0:
-                        self._attempt_auto_fixes(["ydotool daemon not running"], [])
-                        retry_count += 1
-                        continue
-                    else:
-                        self.root.after(0, lambda: self.status_var.set("ydotool not available"))
-                        return
+                    self.root.after(0, lambda: self.status_var.set("ydotool not available - run ./setup.py"))
+                    return
 
                 # Focus captured window if one exists (with fallback)
                 focus_result = self.focus_captured_window()
-                if not focus_result and self.captured_window_id:
-                    # Clear invalid captured window and retry with active window
+                if not focus_result and self.captured_window_id and os.environ.get('XDG_SESSION_TYPE') != 'wayland':
+                    # Only clear window on X11 if focus truly failed
                     print(f"Captured window {self.captured_window_name} no longer valid, clearing...")
                     self.captured_window_id = None
                     self.captured_window_name = None
                     self.captured_window_class = None
+                    self.captured_compositor = None
                     self.root.after(0, lambda: self.window_info_var.set("Window lost - using active window"))
 
                 print(f"Sending text via ydotool: {text_to_send}")

@@ -81,6 +81,7 @@ install_system_deps() {
         "python3-venv"
         "python3-tk"    # Tkinter GUI
         "ydotool"       # Wayland input automation
+        "ydotoold"      # Wayland input automation daemon
         "xclip"         # Clipboard operations
         "xdotool"       # X11 window management (optional)
         "curl"          # For potential future downloads
