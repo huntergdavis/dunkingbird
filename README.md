@@ -1,5 +1,7 @@
 # Dunking Bird
 
+![Dunking Bird](dunkingbird.png)
+
 A simple automation tool that sends text to the currently active window at regular intervals. Perfect for keeping coding agents engaged with prompts like "continue" or "keep going".
 
 ## Features
