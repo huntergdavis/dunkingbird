@@ -79,22 +79,41 @@ check_sudo_nopass() {
     fi
 }
 
-# Super robust dependency installation
-install_dependencies() {
-    info "Installing system dependencies..."
+# Check distribution compatibility
+check_distro() {
+    if ! command -v apt &> /dev/null; then
+        error "This script requires apt package manager (Debian/Ubuntu-based systems)"
+        exit 1
+    fi
 
-    # Update package list with retry
+    # Check if sudo is available
+    if ! command -v sudo &> /dev/null; then
+        error "sudo is required but not installed"
+        exit 1
+    fi
+}
+
+# Update package lists
+update_packages() {
+    info "Updating package lists..."
     local max_attempts=3
     for attempt in $(seq 1 $max_attempts); do
         if sudo apt update -qq &>/dev/null; then
-            break
+            success "Package lists updated"
+            return 0
         else
             warning "Package update attempt $attempt failed, retrying..."
             sleep 2
         fi
     done
+    error "Failed to update package lists after $max_attempts attempts"
+    return 1
+}
 
-    # Install packages with automatic yes
+# Install system dependencies with robust error handling
+install_system_deps() {
+    info "Installing system dependencies..."
+
     local packages=(
         "python3"
         "python3-pip"
@@ -109,18 +128,99 @@ install_dependencies() {
         "procps"
     )
 
-    export DEBIAN_FRONTEND=noninteractive
+    # Check which packages are missing
+    local missing_packages=()
     for package in "${packages[@]}"; do
         if ! dpkg -l | grep -q "^ii.*$package "; then
-            info "Installing $package..."
-            sudo apt install -y "$package" &>/dev/null || warning "Could not install $package"
+            missing_packages+=("$package")
         fi
     done
 
-    success "System dependencies installed"
+    if [ ${#missing_packages[@]} -eq 0 ]; then
+        success "All system dependencies already installed"
+        return 0
+    fi
+
+    info "Installing missing packages: ${missing_packages[*]}"
+    export DEBIAN_FRONTEND=noninteractive
+
+    if sudo apt install -y "${missing_packages[@]}" &>/dev/null; then
+        success "System dependencies installed successfully"
+        return 0
+    else
+        error "Failed to install some system dependencies"
+        return 1
+    fi
 }
 
-# Robust ydotool setup with multiple methods
+# Install and verify Python dependencies
+install_python_deps() {
+    info "Setting up Python dependencies..."
+
+    # Check if we need to create a virtual environment
+    local use_venv=false
+    if [[ "$*" == *"--venv"* ]] || [[ "$*" == *"-v"* ]]; then
+        use_venv=true
+    fi
+
+    if [ "$use_venv" = true ]; then
+        info "Creating Python virtual environment..."
+        if [ ! -d "./venv" ]; then
+            if python3 -m venv "./venv" &>/dev/null; then
+                success "Virtual environment created"
+            else
+                error "Failed to create virtual environment"
+                return 1
+            fi
+        fi
+
+        # Activate virtual environment
+        source "./venv/bin/activate"
+        success "Virtual environment activated"
+
+        # Upgrade pip in venv
+        pip install --upgrade pip &>/dev/null || true
+    fi
+
+    # Install Python packages from requirements.txt
+    if [ -f "requirements.txt" ]; then
+        info "Installing Python packages from requirements.txt..."
+        if [ "$use_venv" = true ]; then
+            pip install -r requirements.txt &>/dev/null || warning "Some Python packages failed to install in venv"
+        else
+            python3 -m pip install --user -r requirements.txt &>/dev/null || warning "Some Python packages failed to install for user"
+        fi
+    fi
+
+    # Verify critical pynput installation
+    info "Verifying pynput installation..."
+    if python3 -c "import pynput; print('OK')" &>/dev/null; then
+        success "pynput installed and working"
+    else
+        warning "pynput not found, installing..."
+
+        # Try multiple installation methods
+        if command -v pip3 >/dev/null; then
+            if [ "$use_venv" = true ]; then
+                pip3 install pynput &>/dev/null || true
+            else
+                pip3 install --user pynput &>/dev/null || true
+            fi
+        fi
+
+        # Final verification
+        if python3 -c "import pynput" &>/dev/null; then
+            success "pynput installed successfully"
+        else
+            warning "Could not install pynput - X11 automation will be limited"
+        fi
+    fi
+
+    success "Python environment configured"
+    return 0
+}
+
+# Configure ydotool daemon and permissions
 setup_ydotool() {
     info "Configuring ydotool for input automation..."
 
@@ -158,101 +258,20 @@ setup_ydotool() {
 
     # Add user to input group if needed
     if ! groups "$USER" | grep -q input; then
-        sudo usermod -a -G input "$USER" 2>/dev/null || true
+        sudo usermod -a -G input "$USER" 2>/dev/null || warning "Could not add user to input group"
     fi
 
     # Test ydotool functionality
     if timeout 3 ydotool type "" 2>/dev/null; then
         success "ydotool configured and working"
+        return 0
     else
         warning "ydotool may need manual configuration"
+        return 1
     fi
 }
 
-# Install Python dependencies robustly
-setup_python() {
-    info "Setting up Python environment..."
-
-    # Install Python packages from requirements.txt if available
-    if [ -f "requirements.txt" ]; then
-        info "Installing Python packages from requirements.txt..."
-        if command -v python3 >/dev/null && python3 -m pip --version >/dev/null 2>&1; then
-            python3 -m pip install --user -r requirements.txt 2>/dev/null || true
-        elif command -v pip3 >/dev/null; then
-            pip3 install --user -r requirements.txt 2>/dev/null || true
-        fi
-    fi
-
-    # Verify critical pynput installation (required for X11 fallback input automation)
-    info "Verifying pynput installation..."
-
-    local pynput_working=false
-
-    # Test if pynput can be imported
-    if python3 -c "import pynput" 2>/dev/null; then
-        success "pynput is installed and working"
-        pynput_working=true
-    else
-        warning "pynput not found, installing manually..."
-
-        # Try pip3 first
-        if command -v pip3 >/dev/null; then
-            if pip3 install --user pynput 2>/dev/null; then
-                info "Installed via pip3, testing..."
-                if python3 -c "import pynput" 2>/dev/null; then
-                    success "pynput installed and verified via pip3"
-                    pynput_working=true
-                fi
-            fi
-        fi
-
-        # Try python3 -m pip if pip3 failed
-        if [ "$pynput_working" = false ] && command -v python3 >/dev/null && python3 -m pip --version >/dev/null 2>&1; then
-            if python3 -m pip install --user pynput 2>/dev/null; then
-                info "Installed via python3 -m pip, testing..."
-                if python3 -c "import pynput" 2>/dev/null; then
-                    success "pynput installed and verified via python3 -m pip"
-                    pynput_working=true
-                fi
-            fi
-        fi
-
-        # Final check
-        if [ "$pynput_working" = false ]; then
-            error "CRITICAL: Could not install pynput!"
-            error "X11 keyboard automation will not work properly"
-            error "Please install manually after installation: pip3 install --user pynput"
-            error "Then test with: python3 -c 'import pynput'"
-        fi
-    fi
-
-    success "Python environment ready"
-}
-
-# Download application files if not present
-download_app() {
-    if [ ! -f "dunking_bird.py" ]; then
-        info "Downloading Dunking Bird application..."
-
-        # Try multiple download methods
-        if command -v curl >/dev/null; then
-            curl -fsSL -o dunking_bird.py "https://raw.githubusercontent.com/user/repo/main/dunking_bird.py" 2>/dev/null || true
-        elif command -v wget >/dev/null; then
-            wget -q -O dunking_bird.py "https://raw.githubusercontent.com/user/repo/main/dunking_bird.py" 2>/dev/null || true
-        fi
-
-        if [ ! -f "dunking_bird.py" ]; then
-            error "Could not download application. Please download manually."
-            exit 1
-        fi
-
-        success "Application downloaded"
-    else
-        success "Application files found"
-    fi
-}
-
-# Create super robust launcher
+# Create smart launcher script
 create_launcher() {
     info "Creating smart launcher..."
 
@@ -263,6 +282,12 @@ create_launcher() {
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "🦆 Starting Dunking Bird..."
+
+# Check if virtual environment exists
+if [ -d "$SCRIPT_DIR/venv" ]; then
+    echo "Activating virtual environment..."
+    source "$SCRIPT_DIR/venv/bin/activate"
+fi
 
 # Ensure ydotool daemon is running
 if ! pgrep -f ydotoold >/dev/null; then
@@ -276,41 +301,37 @@ if [ -S "/tmp/.ydotool_socket" ]; then
     sudo chmod 666 /tmp/.ydotool_socket 2>/dev/null || true
 fi
 
-# Try virtual environment if it exists
-if [ -d "$SCRIPT_DIR/venv" ]; then
-    source "$SCRIPT_DIR/venv/bin/activate"
-fi
-
 # Launch with error handling
 cd "$SCRIPT_DIR"
 python3 dunking_bird.py "$@" || {
     echo "❌ Error launching application"
-    echo "💡 Try running: ./easy_install.sh"
+    echo "💡 Try running the installation script again"
     exit 1
 }
 EOF
 
     chmod +x "run_dunking_bird.sh"
     success "Smart launcher created"
+    return 0
 }
 
-# Comprehensive system test
-run_tests() {
+# Test system functionality
+test_functionality() {
     info "Running system tests..."
 
-    # Test 1: Python and tkinter
-    if python3 -c "import tkinter; import threading; import subprocess; import os" 2>/dev/null; then
-        success "Python environment OK"
+    # Test 1: Python and dependencies
+    if python3 -c "import tkinter; import threading; import subprocess; import os; import time" &>/dev/null; then
+        success "Python environment working"
     else
-        error "Python environment issue"
+        error "Python environment test failed"
         return 1
     fi
 
     # Test 2: ydotool basic functionality
-    if timeout 3 ydotool type "" 2>/dev/null; then
+    if timeout 5 ydotool type --delay 100 "" &>/dev/null; then
         success "ydotool working"
     else
-        warning "ydotool may have issues"
+        warning "ydotool test failed - you may need to check permissions or restart"
     fi
 
     # Test 3: GUI display
@@ -320,6 +341,23 @@ run_tests() {
         warning "No display server detected"
     fi
 
+    success "System tests completed"
+    return 0
+}
+
+# Main installation process
+run_installation() {
+    info "Running comprehensive installation..."
+
+    check_distro
+    update_packages || return 1
+    install_system_deps || return 1
+    install_python_deps "$@" || return 1
+    setup_ydotool || return 1
+    create_launcher || return 1
+    test_functionality || return 1
+
+    success "Installation completed successfully"
     return 0
 }
 
@@ -333,24 +371,12 @@ main() {
     # Check prerequisites
     check_sudo_nopass
 
-    # Step-by-step installation with progress
-    echo -e "${CYAN}📦 Installing system packages...${NC}"
-    install_dependencies
-
-    echo -e "${CYAN}🔧 Setting up ydotool...${NC}"
-    setup_ydotool
-
-    echo -e "${CYAN}🐍 Configuring Python...${NC}"
-    setup_python
-
-    echo -e "${CYAN}📥 Preparing application...${NC}"
-    download_app
-
-    echo -e "${CYAN}🚀 Creating launcher...${NC}"
-    create_launcher
-
-    echo -e "${CYAN}🧪 Running tests...${NC}"
-    run_tests
+    # Run the main installation using install.sh
+    echo -e "${CYAN}🔧 Running core installation...${NC}"
+    if ! run_installation "$@"; then
+        error "Installation failed!"
+        exit 1
+    fi
 
     echo ""
     echo -e "${GREEN}🎉 INSTALLATION COMPLETE! 🎉${NC}"
@@ -376,6 +402,28 @@ main() {
 
 # Error handling
 trap 'echo -e "\n${RED}❌ Installation interrupted${NC}"' INT TERM
+
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --help|-h)
+            echo "Usage: $0 [OPTIONS]"
+            echo ""
+            echo "Options:"
+            echo "  --venv, -v    Install in Python virtual environment"
+            echo "  --help, -h    Show this help message"
+            echo ""
+            echo "The ultimate one-click install script for Dunking Bird!"
+            echo "Installs all dependencies, configures the system, and creates a launcher."
+            exit 0
+            ;;
+        *)
+            # Pass unknown arguments to main
+            break
+            ;;
+    esac
+    shift
+done
 
 # Run main function
 main "$@"

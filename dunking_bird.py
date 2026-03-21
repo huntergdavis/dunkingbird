@@ -753,9 +753,12 @@ if (active) {
             # Small delay before typing
             time.sleep(0.5)
 
-            # Type the text with newline
-            text_with_enter = text_to_send + '\n'
-            subprocess.run(['ydotool', 'type', '--delay', '50', text_with_enter], check=True)
+            # Type the text (without newline)
+            subprocess.run(['ydotool', 'type', '--delay', '50', text_to_send], check=True)
+
+            # Then send actual Enter key press to execute the command
+            time.sleep(0.1)  # Brief delay between typing and Enter
+            subprocess.run(['ydotool', 'key', 'Return'], check=True)
 
             print(f"Successfully sent text using ydotool")
             current_time = time.strftime("%H:%M:%S")
@@ -808,11 +811,15 @@ if (active) {
 
                 # Escape special characters that might cause issues
                 safe_text = text_to_send.replace('\\', '\\\\').replace('"', '\\"')
-                text_with_enter = safe_text + '\n'
 
-                # Use ydotool with timeout for robustness
-                result = subprocess.run(['timeout', '10', 'ydotool', 'type', '--delay', '50', text_with_enter],
+                # First, type the text (without newline)
+                result = subprocess.run(['timeout', '10', 'ydotool', 'type', '--delay', '50', safe_text],
                                       capture_output=True, text=True, check=True)
+
+                # Then, send actual Enter key press to execute the command
+                time.sleep(0.1)  # Brief delay between typing and Enter
+                subprocess.run(['timeout', '5', 'ydotool', 'key', 'Return'],
+                             capture_output=True, text=True, check=True)
 
                 print(f"Successfully sent text via ydotool: {text_to_send}")
                 current_time = time.strftime("%H:%M:%S")
