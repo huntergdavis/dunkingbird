@@ -4,6 +4,12 @@
 
 A robust automation tool that sends text to windows at regular intervals. Perfect for keeping coding agents engaged with prompts like "continue" or "keep going". Now with window targeting and bulletproof installation!
 
+## 🖼️ Screenshot
+
+<img src="screenshot.png" alt="Dunking Bird in Action" width="80%">
+
+*The app successfully capturing and focusing the "Untitled * — Kate" window with real-time window detection and precise targeting!*
+
 ## ✨ Features
 
 - **🎯 Window Capture**: Capture and target specific windows instead of just the active window
