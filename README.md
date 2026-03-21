@@ -15,15 +15,33 @@ A simple automation tool that sends text to the currently active window at regul
 
 ## Installation
 
-1. **Install Python dependencies**:
+### Quick Install (One-liner for Agents/Scripts)
+```bash
+sudo apt update && sudo apt install -y python3-tk ydotool xclip && python3 dunking_bird.py
+```
+
+### Manual Installation
+
+1. **Check your display server** (Wayland vs X11):
    ```bash
-   pip install -r requirements.txt
+   echo $XDG_SESSION_TYPE
    ```
 
-2. **Make the script executable** (optional):
+2. **Install system dependencies**:
+   ```bash
+   sudo apt update
+   sudo apt install -y python3-tk ydotool xclip
+   ```
+
+3. **No Python pip dependencies needed** - uses system packages only!
+
+4. **Make executable** (optional):
    ```bash
    chmod +x dunking_bird.py
    ```
+
+### Wayland Compatibility
+This app now works perfectly on **Wayland** (modern Linux desktop) using `ydotool` for input automation. The old X11-based tools (xdotool, pynput) are blocked by Wayland's security model.
 
 ## Usage
 

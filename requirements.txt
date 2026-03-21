@@ -1,1 +1,8 @@
-pynput>=1.7.6
+# Python dependencies
+# Note: pynput is kept for potential X11 compatibility but not used on Wayland
+
+# System dependencies (install with apt):
+# - python3-tk (tkinter GUI)
+# - ydotool (Wayland input automation)
+# - xclip (clipboard operations)
+# - xdotool (X11 compatibility, optional)
