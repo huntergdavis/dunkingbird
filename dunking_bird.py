@@ -758,7 +758,7 @@ if (active) {
             safe_text = text_to_send.replace("'", "'\"'\"'").replace('\\', '\\\\')
 
             # Use echo with newline piped to ydotool for proper Enter handling
-            cmd = f"echo -e '{safe_text}\\n' | ydotool type --delay 50 --file -"
+            cmd = f"echo '{safe_text}\\n' | ydotool type --delay 50 --file -"
             subprocess.run(cmd, shell=True, check=True)
 
             print(f"Successfully sent text using ydotool")
@@ -814,7 +814,7 @@ if (active) {
                 safe_text = text_to_send.replace("'", "'\"'\"'").replace('\\', '\\\\')
 
                 # Use echo with newline piped to ydotool for proper Enter handling
-                cmd = f"echo -e '{safe_text}\\n' | timeout 10 ydotool type --delay 50 --file -"
+                cmd = f"echo '{safe_text}\\n' | timeout 10 ydotool type --delay 50 --file -"
                 result = subprocess.run(cmd, shell=True, capture_output=True, text=True, check=True)
 
                 print(f"Successfully sent text via ydotool: {text_to_send}")
