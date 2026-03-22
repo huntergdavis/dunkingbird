@@ -740,6 +740,7 @@ if (active) {
 
     # Removed all setup/installation functions - use setup.py script instead
 
+
     def send_text_to_window(self, window_id):
         """Send text using ydotool for Wayland compatibility"""
         try:
@@ -753,8 +754,12 @@ if (active) {
             # Small delay before typing
             time.sleep(0.5)
 
-            # Type the text with newline (this will press Enter automatically)
-            subprocess.run(['ydotool', 'type', '--delay', '50', text_to_send + '\n'], check=True)
+            # Escape special characters for shell command
+            safe_text = text_to_send.replace("'", "'\"'\"'").replace('\\', '\\\\')
+
+            # Use echo with newline piped to ydotool for proper Enter handling
+            cmd = f"echo -e '{safe_text}\\n' | ydotool type --delay 50 --file -"
+            subprocess.run(cmd, shell=True, check=True)
 
             print(f"Successfully sent text using ydotool")
             current_time = time.strftime("%H:%M:%S")
@@ -805,12 +810,12 @@ if (active) {
                 # Additional delay for window focus
                 time.sleep(0.3)
 
-                # Escape special characters that might cause issues
-                safe_text = text_to_send.replace('\\', '\\\\').replace('"', '\\"')
+                # Escape special characters for shell command
+                safe_text = text_to_send.replace("'", "'\"'\"'").replace('\\', '\\\\')
 
-                # Type the text with newline (this will press Enter automatically)
-                result = subprocess.run(['timeout', '10', 'ydotool', 'type', '--delay', '50', safe_text + '\n'],
-                                      capture_output=True, text=True, check=True)
+                # Use echo with newline piped to ydotool for proper Enter handling
+                cmd = f"echo -e '{safe_text}\\n' | timeout 10 ydotool type --delay 50 --file -"
+                result = subprocess.run(cmd, shell=True, capture_output=True, text=True, check=True)
 
                 print(f"Successfully sent text via ydotool: {text_to_send}")
                 current_time = time.strftime("%H:%M:%S")
