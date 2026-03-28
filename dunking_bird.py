@@ -11,6 +11,7 @@ import time
 import subprocess
 import os
 import stat
+import tempfile
 # Import pynput with error handling
 try:
     from pynput import keyboard
@@ -738,6 +739,97 @@ if (active) {
             # ydotool may return error code but still be functional
             return True
 
+    def _get_ydotool_socket_path(self):
+        """Find the ydotool socket path"""
+        # Check env var first
+        env_socket = os.environ.get('YDOTOOL_SOCKET')
+        if env_socket and os.path.exists(env_socket):
+            return env_socket
+
+        # Common socket locations
+        candidates = [
+            '/tmp/.ydotool_socket',
+            '/run/user/{}/ydotool_socket'.format(os.getuid()),
+            os.path.expanduser('~/.ydotool_socket'),
+            '/tmp/ydotool_socket',
+        ]
+
+        for path in candidates:
+            if os.path.exists(path):
+                return path
+
+        # Try to find it via the running daemon
+        try:
+            result = subprocess.run(['pgrep', '-a', 'ydotoold'],
+                                  capture_output=True, text=True, timeout=3)
+            if result.stdout:
+                # Parse socket path from daemon args if present
+                for arg in result.stdout.split():
+                    if 'socket' in arg.lower() or arg.startswith('/'):
+                        if os.path.exists(arg):
+                            return arg
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            pass
+
+        return None
+
+    def _ensure_ydotool_socket_permissions(self):
+        """Check and fix ydotool socket permissions before each action.
+        Returns True if socket is accessible, False otherwise."""
+        socket_path = self._get_ydotool_socket_path()
+        if not socket_path:
+            print("Could not find ydotool socket - daemon may not be running")
+            # Try to restart the daemon
+            return self._restart_ydotool_daemon()
+
+        try:
+            # Check if we can access the socket
+            if os.access(socket_path, os.R_OK | os.W_OK):
+                return True
+
+            print(f"Socket {socket_path} not accessible, fixing permissions...")
+            # Try chmod directly first
+            try:
+                subprocess.run(['sudo', 'chmod', '666', socket_path],
+                             capture_output=True, timeout=5)
+                if os.access(socket_path, os.R_OK | os.W_OK):
+                    print(f"Fixed socket permissions on {socket_path}")
+                    return True
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                pass
+
+            # If chmod failed, try restarting the daemon
+            print("chmod failed, restarting ydotool daemon...")
+            return self._restart_ydotool_daemon()
+
+        except Exception as e:
+            print(f"Error checking socket permissions: {e}")
+            return self._restart_ydotool_daemon()
+
+    def _restart_ydotool_daemon(self):
+        """Restart ydotoold and fix socket permissions. Returns True on success."""
+        try:
+            subprocess.run(['sudo', 'pkill', '-9', 'ydotoold'],
+                         capture_output=True, timeout=3)
+            time.sleep(0.5)
+            subprocess.Popen(['sudo', 'ydotoold'],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(1.5)
+
+            # Fix permissions on the new socket
+            socket_path = self._get_ydotool_socket_path()
+            if socket_path:
+                try:
+                    subprocess.run(['sudo', 'chmod', '666', socket_path],
+                                 capture_output=True, timeout=3)
+                except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                    pass
+                return os.access(socket_path, os.R_OK | os.W_OK)
+            return False
+        except Exception as e:
+            print(f"Failed to restart ydotool daemon: {e}")
+            return False
+
     # Removed all setup/installation functions - use setup.py script instead
 
 
@@ -748,18 +840,20 @@ if (active) {
             if not text_to_send:
                 return
 
+            # Ensure socket permissions before sending
+            self._ensure_ydotool_socket_permissions()
+
             print(f"Sending text using ydotool: {text_to_send}")
 
             # Use ydotool which works on Wayland
             # Small delay before typing
             time.sleep(0.5)
 
-            # Escape special characters for shell command
-            safe_text = text_to_send.replace("'", "'\"'\"'").replace('\\', '\\\\')
-
-            # Use echo with newline piped to ydotool for proper Enter handling
-            cmd = f"echo '{safe_text}\\n' | ydotool type --delay 50 --file -"
-            subprocess.run(cmd, shell=True, check=True)
+            # Type the text first, then send Enter separately
+            # Splitting avoids a race where the last char gets dropped on cold ydotool connections
+            subprocess.run(['ydotool', 'type', '--delay', '50', text_to_send], check=True, timeout=30)
+            time.sleep(0.2)
+            subprocess.run(['ydotool', 'type', '\n'], check=True, timeout=5)
 
             print(f"Successfully sent text using ydotool")
             current_time = time.strftime("%H:%M:%S")
@@ -789,6 +883,10 @@ if (active) {
                     self.root.after(0, lambda: self.status_var.set("Text too long (max 1000 chars)"))
                     return
 
+                # Ensure socket permissions are good before each action
+                if not self._ensure_ydotool_socket_permissions():
+                    print("Socket permission check failed, will try anyway...")
+
                 # Check ydotool availability before sending
                 if not self._check_ydotool_available():
                     self.root.after(0, lambda: self.status_var.set("ydotool not available - run ./setup.py"))
@@ -810,21 +908,24 @@ if (active) {
                 # Additional delay for window focus
                 time.sleep(0.3)
 
-                # Escape special characters for shell command
-                safe_text = text_to_send.replace("'", "'\"'\"'").replace('\\', '\\\\')
-
-                # Use echo with newline piped to ydotool for proper Enter handling
-                cmd = f"echo '{safe_text}\\n' | timeout 10 ydotool type --delay 50 --file -"
-                result = subprocess.run(cmd, shell=True, capture_output=True, text=True, check=True)
+                # Type the text first, then send Enter separately
+                # Splitting avoids a race where the last char gets dropped on cold ydotool connections
+                result = subprocess.run(
+                    ['ydotool', 'type', '--delay', '50', text_to_send],
+                    capture_output=True, text=True, check=True, timeout=30
+                )
+                time.sleep(0.2)
+                subprocess.run(['ydotool', 'type', '\n'],
+                    capture_output=True, text=True, check=True, timeout=5)
 
                 print(f"Successfully sent text via ydotool: {text_to_send}")
                 current_time = time.strftime("%H:%M:%S")
 
                 # Update status with window info if captured
                 if self.captured_window_id:
-                    status_text = f"✅ Sent to {self.captured_window_name} at {current_time}"
+                    status_text = f"Sent to {self.captured_window_name} at {current_time}"
                 else:
-                    status_text = f"✅ Running - Last sent at {current_time}"
+                    status_text = f"Running - Last sent at {current_time}"
 
                 self.root.after(0, lambda: self.status_var.set(status_text))
                 return  # Success, exit retry loop
@@ -833,31 +934,31 @@ if (active) {
                 retry_count += 1
                 print(f"ydotool timeout, retry {retry_count}/{max_retries}")
                 if retry_count < max_retries:
+                    self._ensure_ydotool_socket_permissions()
                     time.sleep(1)
                     continue
                 else:
-                    self.root.after(0, lambda: self.status_var.set("❌ Timeout sending text"))
+                    self.root.after(0, lambda: self.status_var.set("Timeout sending text"))
 
             except subprocess.CalledProcessError as e:
                 retry_count += 1
                 print(f"Error sending text via ydotool: {e}, retry {retry_count}/{max_retries}")
                 if retry_count < max_retries:
-                    # Try to restart daemon
-                    subprocess.run(['sudo', 'pkill', 'ydotoold'], capture_output=True)
-                    subprocess.run(['sudo', 'ydotoold'], capture_output=True)
-                    time.sleep(2)
+                    # Try to fix socket and restart daemon
+                    self._restart_ydotool_daemon()
                     continue
                 else:
-                    self.root.after(0, lambda: self.status_var.set("❌ Error sending text - check setup"))
+                    self.root.after(0, lambda: self.status_var.set("Error sending text - check setup"))
 
             except Exception as e:
                 retry_count += 1
                 print(f"Unexpected error with ydotool: {e}, retry {retry_count}/{max_retries}")
                 if retry_count < max_retries:
+                    self._ensure_ydotool_socket_permissions()
                     time.sleep(1)
                     continue
                 else:
-                    self.root.after(0, lambda: self.status_var.set(f"❌ Unexpected error: {str(e)[:50]}"))
+                    self.root.after(0, lambda: self.status_var.set(f"Unexpected error: {str(e)[:50]}"))
 
     def timer_loop(self):
         """Main timer loop that runs in a separate thread"""
