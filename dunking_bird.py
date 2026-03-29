@@ -852,7 +852,7 @@ if (active) {
             # Type the text first, then send Enter separately
             # Splitting avoids a race where the last char gets dropped on cold ydotool connections
             subprocess.run(['ydotool', 'type', '--delay', '50', text_to_send], check=True, timeout=30)
-            time.sleep(0.2)
+            time.sleep(1.0)
             subprocess.run(['ydotool', 'type', '\n'], check=True, timeout=5)
 
             print(f"Successfully sent text using ydotool")
@@ -914,7 +914,7 @@ if (active) {
                     ['ydotool', 'type', '--delay', '50', text_to_send],
                     capture_output=True, text=True, check=True, timeout=30
                 )
-                time.sleep(0.2)
+                time.sleep(1.0)
                 subprocess.run(['ydotool', 'type', '\n'],
                     capture_output=True, text=True, check=True, timeout=5)
 
