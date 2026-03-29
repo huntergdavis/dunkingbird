@@ -783,6 +783,16 @@ if (active) {
             return self._restart_ydotool_daemon()
 
         try:
+            # Check if daemon is actually running (stale socket can exist after crash)
+            try:
+                result = subprocess.run(['pgrep', '-x', 'ydotoold'],
+                                      capture_output=True, timeout=3)
+                if result.returncode != 0:
+                    print("ydotoold not running (stale socket), restarting...")
+                    return self._restart_ydotool_daemon()
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                pass
+
             # Check if we can access the socket
             if os.access(socket_path, os.R_OK | os.W_OK):
                 return True
