@@ -79,9 +79,15 @@ class DunkerRow:
                                           textvariable=self.interval_var, width=5, format="%.1f")
         self.interval_spin.grid(row=r, column=3, padx=2, pady=3)
 
-        self.text_var = tk.StringVar(value="continue")
-        self.text_entry = ttk.Entry(f, textvariable=self.text_var, width=15)
-        self.text_entry.grid(row=r, column=4, padx=2, pady=3)
+        self.text_value = "continue"  # full text stored here
+
+        # Clickable preview label — click to open editor
+        self.text_preview_var = tk.StringVar(value="continue")
+        self.text_preview = ttk.Label(f, textvariable=self.text_preview_var,
+                                       width=16, anchor=tk.W, relief="sunken",
+                                       padding=(4, 2), cursor="hand2")
+        self.text_preview.grid(row=r, column=4, padx=2, pady=3, sticky=tk.W)
+        self.text_preview.bind("<Button-1>", lambda e: self.open_text_editor())
 
         self.capture_btn = ttk.Button(f, text="Capture", command=self.capture_window, width=7)
         self.capture_btn.grid(row=r, column=5, padx=2, pady=3)
@@ -94,7 +100,7 @@ class DunkerRow:
 
         self._all_widgets = [
             self.num_label, self.status_label, self.window_label,
-            self.interval_spin, self.text_entry, self.capture_btn,
+            self.interval_spin, self.text_preview, self.capture_btn,
             self.test_btn, self.start_stop_btn,
         ]
 
@@ -188,6 +194,56 @@ class DunkerRow:
             name = name[:25] + "..."
         self.window_var.set(name)
 
+    # ── text editor popup ─────────────────────────────────────
+
+    def open_text_editor(self):
+        """Open a popup window to edit this dunker's text."""
+        popup = tk.Toplevel(self.app.root)
+        popup.title(f"Dunker #{self.row_num} — Edit Text")
+        popup.geometry("450x320")
+        popup.minsize(300, 250)
+        popup.resizable(True, True)
+
+        frame = ttk.Frame(popup, padding="10")
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(frame, text="Text to send (supports multiple lines):").pack(
+            anchor=tk.W, pady=(0, 5))
+
+        from tkinter import scrolledtext
+        text_widget = scrolledtext.ScrolledText(frame, width=50, height=10, wrap=tk.WORD,
+                                                 font=("monospace", 10))
+        text_widget.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        text_widget.insert(tk.END, self.text_value)
+        text_widget.focus_set()
+
+        def save_and_close():
+            self.text_value = text_widget.get("1.0", tk.END).strip()
+            self._update_text_preview()
+            popup.destroy()
+
+        def cancel():
+            popup.destroy()
+
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(anchor=tk.E)
+        ttk.Button(btn_frame, text="Cancel", command=cancel).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_frame, text="Save", command=save_and_close).pack(side=tk.LEFT, padx=4)
+
+        # Ctrl+Enter saves, Escape cancels
+        popup.bind("<Control-Return>", lambda e: save_and_close())
+        popup.bind("<Escape>", lambda e: cancel())
+
+        popup.lift()
+        popup.focus_force()
+
+    def _update_text_preview(self):
+        """Update the truncated preview label from the full text."""
+        preview = self.text_value.replace("\n", " ")
+        if len(preview) > 18:
+            preview = preview[:15] + "..."
+        self.text_preview_var.set(preview)
+
     # ── test ──────────────────────────────────────────────────
 
     def test_send(self):
@@ -262,7 +318,7 @@ class DunkerRow:
     def _do_send(self):
         """Send text to this dunker's target window. Caller must hold send_lock.
         Returns True on success, False on failure."""
-        text = self.text_var.get().strip()
+        text = self.text_value.strip()
         if not text:
             return True  # nothing to send is not an error
 
