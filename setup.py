@@ -129,6 +129,7 @@ class DunkingBirdSetup:
         self.info("Performing comprehensive system check...")
         self.issues = []
         self.warnings = []
+        is_wayland = os.environ.get('XDG_SESSION_TYPE') == 'wayland'
 
         # Check ydotool availability
         if not self.check_ydotool_available():
@@ -136,11 +137,12 @@ class DunkingBirdSetup:
         else:
             self.success("ydotool command available")
 
-        # Check kdotool availability (for KDE Wayland)
-        if not self.check_kdotool_available():
-            self.issues.append("kdotool command not found or not working")
-        else:
-            self.success("kdotool command available")
+        # Check kdotool availability only for Wayland sessions
+        if is_wayland:
+            if not self.check_kdotool_available():
+                self.issues.append("kdotool command not found or not working")
+            else:
+                self.success("kdotool command available")
 
         # Check ydotool daemon
         daemon_status = self.check_ydotool_daemon()
@@ -282,29 +284,35 @@ class DunkingBirdSetup:
             print("   sudo apt install ydotool ydotoold")
             print()
 
+        if any("kdotool command not found" in issue for issue in self.issues):
+            print("2. Install kdotool for Wayland window capture:")
+            print("   sudo apt update")
+            print("   sudo apt install kdotool")
+            print()
+
         if any("daemon not running" in issue for issue in self.issues):
-            print("2. Start ydotool daemon:")
+            print("3. Start ydotool daemon:")
             print("   sudo ydotoold &")
             print()
 
         if any("socket" in issue for issue in self.issues):
-            print("3. Fix socket permissions:")
+            print("4. Fix socket permissions:")
             print("   sudo chmod 666 /tmp/.ydotool_socket")
             print()
 
         if any("input group" in warning for warning in self.warnings):
-            print("4. Add user to input group:")
+            print("5. Add user to input group:")
             print(f"   sudo usermod -a -G input {getpass.getuser()}")
             print("   (logout/login required)")
             print()
 
         if any("Python dependencies" in issue for issue in self.issues):
-            print("5. Install Python dependencies:")
+            print("6. Install Python dependencies:")
             print("   sudo apt install python3-tk python3-pip")
             print("   pip3 install --user pynput")
             print()
 
-        print("6. Or run the install script:")
+        print("7. Or run the install script:")
         print("   ./install.sh")
 
     def interactive_setup(self):

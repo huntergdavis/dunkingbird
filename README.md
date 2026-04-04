@@ -40,6 +40,7 @@ The installer automatically:
 - ✅ Installs all system dependencies
 - ✅ Sets up Python environment (optional venv)
 - ✅ Configures ydotool daemon and permissions
+- ✅ Installs Wayland capture backend (`kdotool`) when available
 - ✅ Tests functionality and provides fixes
 - ✅ Creates convenient launcher script
 
@@ -60,7 +61,7 @@ The installer automatically:
 3. **Or install manually:**
    ```bash
    sudo apt update
-   sudo apt install -y python3-tk ydotool xclip xdotool python3-venv
+   sudo apt install -y python3-tk ydotool ydotoold kdotool xclip xdotool python3-venv
    pip3 install --user pynput
    sudo ydotoold &
    ```
@@ -187,9 +188,12 @@ sudo apt install python3-tk
 ```
 
 **❌ Window capture not working**
+- **KDE Wayland**: Install `sudo apt install kdotool`
 - **X11**: Install `sudo apt install xdotool`
 - **Wayland/Sway**: Ensure `swaymsg` is available
-- **Other Wayland**: Limited window detection, use active window mode
+- **GNOME or generic Wayland**: This app cannot reliably capture and refocus another window without a compositor-specific backend
+
+**Important**: `ydotoold` socket permissions affect typing, not window capture. If capture fails on Wayland, the usual cause is a missing capture backend such as `kdotool`, not the background service.
 
 **❌ Text not reaching target**
 - Ensure target window can accept keyboard input
@@ -219,6 +223,7 @@ curl -fsSL https://raw.githubusercontent.com/user/repo/main/install.sh | bash
 ### Dependencies (Auto-installed)
 - `python3-tk` - GUI framework
 - `ydotool` - Modern input automation (Wayland compatible)
+- `kdotool` - KDE Wayland window discovery/focus
 - `xclip` - Clipboard operations (fallback)
 - `xdotool` - X11 window management (optional)
 - `pynput` - Python input library (fallback)

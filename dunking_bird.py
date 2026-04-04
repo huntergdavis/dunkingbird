@@ -13,6 +13,7 @@ import time
 import subprocess
 import os
 import json
+import shutil
 
 # Import pynput with error handling
 try:
@@ -167,7 +168,7 @@ class DunkerRow:
                     self.captured_compositor = info.get("compositor", "unknown")
                     self._show_window_name()
                 else:
-                    self.window_var.set("Capture failed")
+                    self.window_var.set(self.app.get_wayland_capture_error())
             else:
                 wid = self.app.select_window_interactive()
                 if wid:
@@ -447,6 +448,9 @@ class DunkingBirdApp:
         try:
             if not self._check_ydotool_available():
                 self.global_status_var.set("⚠️  ydotool not found – run ./setup.py")
+            elif (os.environ.get("XDG_SESSION_TYPE") == "wayland"
+                  and not self._has_wayland_capture_backend()):
+                self.global_status_var.set("⚠️  Wayland capture backend missing – install kdotool")
             else:
                 self._update_count()
         except Exception as e:
@@ -462,6 +466,27 @@ class DunkingBirdApp:
             return False
         except subprocess.CalledProcessError:
             return True
+
+    def _command_exists(self, cmd):
+        return shutil.which(cmd) is not None
+
+    def _has_wayland_capture_backend(self):
+        return any(self._command_exists(cmd) for cmd in ["kdotool", "swaymsg", "hyprctl"])
+
+    def get_wayland_capture_error(self):
+        desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
+        session = os.environ.get("XDG_SESSION_DESKTOP", "").lower()
+        if self._command_exists("kdotool"):
+            return "No active window"
+        if self._command_exists("swaymsg"):
+            return "No focused Sway window"
+        if self._command_exists("hyprctl"):
+            return "No active Hyprland window"
+        if "kde" in desktop or "plasma" in desktop or "kde" in session:
+            return "Install kdotool"
+        if "gnome" in desktop or "gnome" in session:
+            return "GNOME Wayland unsupported"
+        return "No Wayland capture tool"
 
     def _get_ydotool_socket_path(self):
         env_socket = os.environ.get("YDOTOOL_SOCKET")
@@ -676,42 +701,8 @@ class DunkingBirdApp:
             except Exception:
                 pass
 
-        # GNOME
-        if cmd_exists("gdbus"):
-            try:
-                r = subprocess.run(
-                    ["gdbus", "call", "--session", "--dest", "org.gnome.Shell",
-                     "--object-path", "/org/gnome/Shell", "--method",
-                     "org.gnome.Shell.Eval",
-                     "global.display.focus_window.get_title()"],
-                    capture_output=True, text=True, check=True)
-                if r.stdout and "'" in r.stdout:
-                    s = r.stdout.find("'") + 1
-                    e = r.stdout.rfind("'")
-                    if 0 < s < e:
-                        return {"id": "gnome_active", "name": r.stdout[s:e],
-                                "class": "unknown", "compositor": "gnome"}
-            except Exception:
-                pass
-
-        # KDE fallback via qdbus
-        for qdbus_cmd in ["qdbus6", "qdbus-qt5", "qdbus"]:
-            if cmd_exists(qdbus_cmd):
-                try:
-                    r = subprocess.run(["kdotool", "getactivewindow"],
-                                       capture_output=True, text=True, check=True)
-                    wid = r.stdout.strip()
-                    if wid:
-                        nr = subprocess.run(["kdotool", "getwindowname", wid],
-                                            capture_output=True, text=True, check=True)
-                        return {"id": wid, "name": nr.stdout.strip(),
-                                "class": "kde-window", "compositor": "kde"}
-                except Exception:
-                    pass
-                break
-
-        return {"id": "wayland_fallback", "name": "Active Window (Generic)",
-                "class": "unknown", "compositor": "wayland_generic"}
+        # GNOME and generic Wayland do not expose a stable focusable window id here.
+        return None
 
     def select_window_interactive(self):
         """X11: let user click a window to select it."""

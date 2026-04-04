@@ -121,6 +121,7 @@ install_system_deps() {
         "python3-tk"
         "ydotool"
         "ydotoold"
+        "kdotool"
         "xclip"
         "xdotool"
         "curl"
