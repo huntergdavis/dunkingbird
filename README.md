@@ -2,18 +2,23 @@
 
 <img src="dunkingbird.png" alt="Dunking Bird" width="50%">
 
-A robust automation tool that sends text to windows at regular intervals. Perfect for keeping coding agents engaged with prompts like "continue" or "keep going". Now with window targeting and bulletproof installation!
+A robust terminal-first automation tool that sends text to windows at regular intervals. Perfect for keeping coding agents engaged with prompts like "continue" or "keep going". The default interface is now Dunking Bird TUI, with the original GUI still available as an optional launcher mode.
 
-## 🖼️ Screenshot
+## 🖼️ Screenshots
+
+<img src="tui_screenshot.png" alt="Dunking Bird TUI" width="80%">
+
+*The default TUI interface with multiple dunkers, live status, window targeting, tests, custom text, and start/stop controls.*
 
 <img src="screenshot.png" alt="Dunking Bird in Action" width="80%">
 
-*The app successfully capturing and focusing the "Untitled * — Kate" window with real-time window detection and precise targeting!*
+*The optional GUI capturing and focusing the "Untitled * — Kate" window with real-time window detection and precise targeting.*
 
 ## ✨ Features
 
 - **🎯 Window Capture**: Capture and target specific windows instead of just the active window
-- **⚙️ Simple GUI**: Easy-to-use interface with start/stop controls
+- **⌨️ Terminal-first TUI**: Manage dunkers from your terminal workflow
+- **⚙️ Optional GUI**: The original Tkinter interface is still available with `--gui`
 - **⏱️ Configurable Interval**: Set custom time intervals (0.5-120 minutes)
 - **📝 Custom Text**: Send any text you want to the targeted window
 - **🔄 Automatic Enter**: Automatically presses Enter after sending text
@@ -26,21 +31,21 @@ A robust automation tool that sends text to windows at regular intervals. Perfec
 
 ### Method 1: Automated Installer (Recommended)
 
-**Super Simple - One Command:**
+**From this checkout:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/user/repo/main/install.sh | bash
+./easy_install.sh
 ```
 
 **With Virtual Environment:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/user/repo/main/install.sh | bash -s -- --venv
+./easy_install.sh --venv
 ```
 
 The installer automatically:
 - ✅ Installs all system dependencies
 - ✅ Sets up Python environment (optional venv)
 - ✅ Configures ydotool daemon and permissions
-- ✅ Installs Wayland capture backend (`kdotool`) when available
+- ✅ Uses `kdotool` for KDE Wayland capture/focus when available
 - ✅ Tests functionality and provides fixes
 - ✅ Creates convenient launcher script
 
@@ -54,21 +59,24 @@ The installer automatically:
 
 2. **Run the install script:**
    ```bash
-   chmod +x install.sh
-   ./install.sh
+   chmod +x easy_install.sh
+   ./easy_install.sh --venv
    ```
 
 3. **Or install manually:**
    ```bash
    sudo apt update
-   sudo apt install -y python3-tk ydotool ydotoold kdotool xclip xdotool python3-venv
-   pip3 install --user pynput
-   sudo ydotoold &
+   sudo apt install -y ydotool xclip xdotool python3-venv cargo rustc libdbus-1-dev pkg-config
+   python3 -m venv venv
+   ./venv/bin/pip install -r requirements.txt
+   cargo install --git https://github.com/jinliu/kdotool --root "$HOME/.local"
+   export YDOTOOL_SOCKET="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/.ydotool_socket"
+   sudo ydotoold --socket-path="$YDOTOOL_SOCKET" --socket-own="$(id -u):$(id -g)" &
    ```
 
 ### Method 3: Quick Test (One-liner)
 ```bash
-sudo apt update && sudo apt install -y python3-tk ydotool xclip && sudo ydotoold & sleep 2 && python3 dunking_bird.py
+./run_dunking_bird.sh
 ```
 
 ### 🖥️ Desktop Environment Support
@@ -91,31 +99,53 @@ sudo apt update && sudo apt install -y python3-tk ydotool xclip && sudo ydotoold
 
 ### Basic Usage
 
-1. **Launch the application**:
+1. **Launch the TUI application**:
    ```bash
    ./run_dunking_bird.sh    # If using installer
    # OR
-   python3 dunking_bird.py   # Direct launch
+   python3 dunking_bird_tui.py   # Direct launch
    ```
 
 2. **Configure your settings**:
-   - Set the **interval** in minutes (0.5-120 minutes, default: 10)
-   - Enter the **text** you want to send (default: "continue")
+   - Select a dunker with `j`/`k` or the arrow keys
+   - Press `i` to set the interval in minutes (default: 10)
+   - Press `e` to edit the text to send (default: "continue")
 
 3. **Target a specific window (NEW!)**:
-   - Click **"Capture Window"** button
+   - Press `c` to capture a window
    - The currently active window will be captured and targeted
-   - See captured window info displayed in blue text
+   - See captured window info displayed in the Window column
    - All future text will go to this specific window
 
 4. **Test your setup**:
-   - Click **"Test Send"** to immediately send text with 2-second countdown
+   - Press `t` to immediately send text with a 2-second countdown
    - Verify the text reaches your target window
 
 5. **Start automation**:
-   - Click **"Start"** to begin automatic sending
+   - Press `Space` or `s` to begin automatic sending
    - Real-time countdown shows time until next send
-   - Click **"Stop"** to pause
+   - Press `Space` or `s` again to pause
+
+6. **Manage dunkers**:
+   - Press `a` to add another dunker
+   - Press `d` to remove the selected dunker
+   - Press `q` to quit
+
+### Optional GUI
+
+The original GUI is still available, but it is no longer required for the default workflow.
+
+```bash
+./run_dunking_bird.sh --gui
+# OR
+python3 dunking_bird.py
+```
+
+GUI mode requires Tkinter:
+
+```bash
+sudo apt install python3-tk
+```
 
 ### 🎯 Window Targeting Modes
 
@@ -169,26 +199,29 @@ Dunking Bird automatically detects and offers to fix common issues:
 
 **❌ "ydotool: No such device"**
 ```bash
-sudo ydotoold &
+export YDOTOOL_SOCKET="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/.ydotool_socket"
+sudo ydotoold --socket-path="$YDOTOOL_SOCKET" --socket-own="$(id -u):$(id -g)" &
 sleep 2
 # Try running the app again
 ```
 
 **❌ "Permission denied" on socket**
 ```bash
-sudo chmod 666 /tmp/.ydotool_socket
+sudo chmod 600 "${YDOTOOL_SOCKET:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/.ydotool_socket}"
 # OR add user to input group:
 sudo usermod -a -G input $USER
 # (logout/login required)
 ```
 
-**❌ "ModuleNotFoundError: tkinter"**
+**❌ "ModuleNotFoundError: tkinter" in GUI mode**
 ```bash
 sudo apt install python3-tk
 ```
 
+The default TUI does not require Tkinter or any GUI Python dependency.
+
 **❌ Window capture not working**
-- **KDE Wayland**: Install `sudo apt install kdotool`
+- **KDE Wayland**: install `kdotool` with `cargo install --git https://github.com/jinliu/kdotool --root "$HOME/.local"`
 - **X11**: Install `sudo apt install xdotool`
 - **Wayland/Sway**: Ensure `swaymsg` is available
 - **GNOME or generic Wayland**: This app cannot reliably capture and refocus another window without a compositor-specific backend
@@ -204,13 +237,13 @@ sudo apt install python3-tk
 **❌ Installation issues**
 ```bash
 # Clean install using the automated script
-curl -fsSL https://raw.githubusercontent.com/user/repo/main/install.sh | bash
+./easy_install.sh --venv
 ```
 
 ### Getting Help
-- Run `./install.sh` for automatic dependency checking
+- Run `./easy_install.sh --venv` for automatic dependency checking
 - Check installation log: `cat install.log`
-- Verify ydotool: `ydotool type "test"`
+- Verify ydotool: `YDOTOOL_SOCKET="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/.ydotool_socket" ydotool type "test"`
 
 ## 📋 System Requirements
 
@@ -221,12 +254,14 @@ curl -fsSL https://raw.githubusercontent.com/user/repo/main/install.sh | bash
 - **Desktop**: Any X11 or Wayland environment
 
 ### Dependencies (Auto-installed)
-- `python3-tk` - GUI framework
 - `ydotool` - Modern input automation (Wayland compatible)
 - `kdotool` - KDE Wayland window discovery/focus
 - `xclip` - Clipboard operations (fallback)
 - `xdotool` - X11 window management (optional)
-- `pynput` - Python input library (fallback)
+
+### Optional GUI Dependencies
+- `python3-tk` - Tkinter GUI framework
+- `pynput` - Python input library (X11 fallback)
 
 ## 🎉 Success Stories
 

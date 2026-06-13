@@ -5,22 +5,23 @@
 # PYTHON PACKAGES (pip install -r requirements.txt)
 # =============================================================================
 
-# Core GUI and input automation
-pynput>=1.7.0                   # Keyboard automation (X11 fallback only)
+# No pip packages are required for the default TUI.
+# Optional GUI/X11 fallback:
+#   pynput>=1.7.0
 
 # =============================================================================
 # SYSTEM DEPENDENCIES (install via package manager)
 # =============================================================================
 #
 # For Debian/Ubuntu systems, run:
-#   sudo apt update && sudo apt install -y python3-tk ydotool xclip xdotool python3-venv
+#   sudo apt update && sudo apt install -y ydotool xclip xdotool python3-venv
 #
 # Required packages:
-# - python3-tk          : Tkinter GUI framework (REQUIRED)
 # - ydotool             : Wayland input automation (PRIMARY method)
 # - python3-venv        : Python virtual environments (recommended)
 #
 # Optional packages:
+# - python3-tk          : Tkinter GUI framework (only for GUI mode)
 # - xclip               : X11 clipboard operations (fallback)
 # - xdotool             : X11 window management (fallback)
 # - curl                : For downloading install script
@@ -32,8 +33,10 @@ pynput>=1.7.0                   # Keyboard automation (X11 fallback only)
 # ydotool daemon:
 # - Must be running for Wayland input simulation
 # - Usually started automatically by install script
-# - Manual start: sudo ydotoold &
-# - Socket: /tmp/.ydotool_socket (needs write permissions)
+# - Manual start:
+#   export YDOTOOL_SOCKET="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/.ydotool_socket"
+#   sudo ydotoold --socket-path="$YDOTOOL_SOCKET" --socket-own="$(id -u):$(id -g)" &
+# - Socket: /run/user/$UID/.ydotool_socket by default
 #
 # User permissions:
 # - User should be in 'input' group for ydotool access
@@ -45,23 +48,24 @@ pynput>=1.7.0                   # Keyboard automation (X11 fallback only)
 # =============================================================================
 #
 # Method 1 - Automated installer (recommended):
-#   curl -fsSL https://raw.githubusercontent.com/user/repo/main/install.sh | bash
+#   ./easy_install.sh --venv
 #
 # Method 2 - Manual installation:
 #   sudo apt update
-#   sudo apt install -y python3-tk ydotool xclip xdotool python3-venv
+#   sudo apt install -y ydotool xclip xdotool python3-venv
 #   python3 -m venv venv
 #   source venv/bin/activate
 #   pip install -r requirements.txt
-#   sudo ydotoold &
-#   python3 dunking_bird.py
+#   export YDOTOOL_SOCKET="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/.ydotool_socket"
+#   sudo ydotoold --socket-path="$YDOTOOL_SOCKET" --socket-own="$(id -u):$(id -g)" &
+#   python3 dunking_bird_tui.py
 #
 # Method 3 - System-wide (no venv):
 #   sudo apt update
-#   sudo apt install -y python3-tk ydotool xclip xdotool
-#   pip3 install --user pynput
-#   sudo ydotoold &
-#   python3 dunking_bird.py
+#   sudo apt install -y ydotool xclip xdotool
+#   export YDOTOOL_SOCKET="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/.ydotool_socket"
+#   sudo ydotoold --socket-path="$YDOTOOL_SOCKET" --socket-own="$(id -u):$(id -g)" &
+#   python3 dunking_bird_tui.py
 #
 # =============================================================================
 # COMPATIBILITY
@@ -85,12 +89,12 @@ pynput>=1.7.0                   # Keyboard automation (X11 fallback only)
 #
 # Common issues:
 # 1. "ydotool: No such device" - daemon not running
-#    Solution: sudo ydotoold &
+#    Solution: sudo ydotoold --socket-path="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/.ydotool_socket" --socket-own="$(id -u):$(id -g)" &
 #
 # 2. "Permission denied" on socket
-#    Solution: sudo chmod 666 /tmp/.ydotool_socket
+#    Solution: sudo chmod 600 "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/.ydotool_socket"
 #
-# 3. "ModuleNotFoundError: tkinter"
+# 3. "ModuleNotFoundError: tkinter" in GUI mode
 #    Solution: sudo apt install python3-tk
 #
 # 4. Input not working on Wayland
@@ -99,4 +103,4 @@ pynput>=1.7.0                   # Keyboard automation (X11 fallback only)
 # 5. Window capture not working
 #    Solution: Install xdotool for X11 or ensure swaymsg for Sway
 #
-# For more help, see README.md or run ./install.sh
+# For more help, see README.md or run ./easy_install.sh

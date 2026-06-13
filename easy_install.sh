@@ -113,27 +113,39 @@ update_packages() {
 # Install system dependencies with robust error handling
 install_system_deps() {
     info "Installing system dependencies..."
+    local install_gui=false
+    if [[ "$*" == *"--gui"* ]]; then
+        install_gui=true
+    fi
 
     local packages=(
         "python3"
         "python3-pip"
         "python3-venv"
-        "python3-tk"
         "ydotool"
-        "ydotoold"
-        "kdotool"
+        "cargo"
+        "rustc"
+        "libdbus-1-dev"
+        "pkg-config"
         "xclip"
         "xdotool"
         "curl"
         "coreutils"
         "procps"
     )
+    if [ "$install_gui" = true ]; then
+        packages+=("python3-tk")
+    fi
 
-    # Check which packages are missing
+    # Check which packages are missing and available on this distro release.
     local missing_packages=()
     for package in "${packages[@]}"; do
         if ! dpkg -l | grep -q "^ii.*$package "; then
-            missing_packages+=("$package")
+            if apt-cache show "$package" >/dev/null 2>&1; then
+                missing_packages+=("$package")
+            else
+                warning "Package '$package' is not available in the configured apt repos; skipping"
+            fi
         fi
     done
 
@@ -193,27 +205,19 @@ install_python_deps() {
         fi
     fi
 
-    # Verify critical pynput installation
-    info "Verifying pynput installation..."
-    if python3 -c "import pynput; print('OK')" &>/dev/null; then
-        success "pynput installed and working"
-    else
-        warning "pynput not found, installing..."
-
-        # Try multiple installation methods
-        if command -v pip3 >/dev/null; then
-            if [ "$use_venv" = true ]; then
-                pip3 install pynput &>/dev/null || true
-            else
-                pip3 install --user pynput &>/dev/null || true
-            fi
-        fi
-
-        # Final verification
-        if python3 -c "import pynput" &>/dev/null; then
-            success "pynput installed successfully"
+    if [[ "$*" == *"--gui"* ]]; then
+        info "Verifying optional GUI fallback dependency..."
+        if python3 -c "import pynput; print('OK')" &>/dev/null; then
+            success "pynput installed and working"
         else
-            warning "Could not install pynput - X11 automation will be limited"
+            warning "pynput not found, installing..."
+            if command -v pip3 >/dev/null; then
+                if [ "$use_venv" = true ]; then
+                    pip3 install pynput &>/dev/null || true
+                else
+                    pip3 install --user pynput &>/dev/null || true
+                fi
+            fi
         fi
     fi
 
@@ -221,9 +225,40 @@ install_python_deps() {
     return 0
 }
 
+# Install KDE Wayland window capture/focus backend
+install_kdotool_backend() {
+    if [ "${XDG_SESSION_TYPE:-}" != "wayland" ]; then
+        return 0
+    fi
+
+    local desktop="${XDG_CURRENT_DESKTOP:-}${XDG_SESSION_DESKTOP:-}"
+    if [[ "${desktop,,}" != *kde* && "${desktop,,}" != *plasma* ]]; then
+        return 0
+    fi
+
+    export PATH="$HOME/.local/bin:$PATH"
+    if command -v kdotool >/dev/null 2>&1; then
+        success "kdotool already installed"
+        return 0
+    fi
+
+    info "Installing kdotool for KDE Wayland capture/focus..."
+    if cargo install --git https://github.com/jinliu/kdotool --root "$HOME/.local" &>/dev/null; then
+        success "kdotool installed to $HOME/.local/bin"
+        return 0
+    fi
+
+    warning "Could not install kdotool automatically; window capture may be limited on KDE Wayland"
+    return 0
+}
+
 # Configure ydotool daemon and permissions
 setup_ydotool() {
     info "Configuring ydotool for input automation..."
+    local runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+    local socket_path="${YDOTOOL_SOCKET:-$runtime_dir/.ydotool_socket}"
+    export YDOTOOL_SOCKET="$socket_path"
+    mkdir -p "$(dirname "$socket_path")"
 
     # Kill any existing ydotool processes
     sudo pkill ydotoold 2>/dev/null || true
@@ -232,7 +267,7 @@ setup_ydotool() {
     # Start ydotool daemon with multiple methods
     if ! pgrep -f ydotoold >/dev/null; then
         # Method 1: Direct daemon start
-        sudo ydotoold --socket-path=/tmp/.ydotool_socket --socket-own=$(id -u):$(id -g) 2>/dev/null &
+        sudo ydotoold --socket-path="$socket_path" --socket-own=$(id -u):$(id -g) 2>/dev/null &
 
         # Give it time to start
         sleep 3
@@ -245,16 +280,19 @@ setup_ydotool() {
 
         # Method 3: Fallback manual start
         if ! pgrep -f ydotoold >/dev/null; then
-            nohup sudo ydotoold &>/dev/null &
+            nohup sudo ydotoold --socket-path="$socket_path" --socket-own="$(id -u):$(id -g)" &>/dev/null &
             sleep 2
         fi
     fi
 
-    # Fix socket permissions aggressively
-    local socket_path="/tmp/.ydotool_socket"
+    # Fix socket permissions aggressively after the daemon recreates the socket.
+    for _ in 1 2 3 4 5; do
+        [ -S "$socket_path" ] && break
+        sleep 1
+    done
     if [ -S "$socket_path" ]; then
-        sudo chmod 666 "$socket_path" 2>/dev/null || true
-        sudo chown root:input "$socket_path" 2>/dev/null || true
+        sudo chown "$(id -u):$(id -g)" "$socket_path" 2>/dev/null || true
+        sudo chmod 600 "$socket_path" 2>/dev/null || true
     fi
 
     # Add user to input group if needed
@@ -281,8 +319,46 @@ create_launcher() {
 
 # Dunking Bird Smart Launcher - Handles everything automatically
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export PATH="$HOME/.local/bin:$PATH"
 
-echo "🦆 Starting Dunking Bird..."
+mode="tui"
+if [ "${1:-}" = "--gui" ]; then
+    mode="gui"
+    shift
+elif [ "${1:-}" = "--tui" ]; then
+    shift
+fi
+
+echo "🦆 Starting Dunking Bird ($mode)..."
+
+# Make sure the ydotool socket is usable even if the daemon recreates it as root-only.
+ensure_ydotool_ready() {
+    local runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+    local socket_path="${YDOTOOL_SOCKET:-$runtime_dir/.ydotool_socket}"
+    local waited=0
+
+    export YDOTOOL_SOCKET="$socket_path"
+    mkdir -p "$(dirname "$socket_path")"
+
+    if [ ! -S "$socket_path" ] || ! timeout 2 ydotool type "" >/dev/null 2>&1; then
+        echo "🔧 Starting ydotool daemon..."
+        sudo pkill ydotoold 2>/dev/null || true
+        nohup sudo ydotoold --socket-path="$socket_path" --socket-own="$(id -u):$(id -g)" >/dev/null 2>&1 &
+    fi
+
+    while [ $waited -lt 50 ]; do
+        if [ -S "$socket_path" ]; then
+            break
+        fi
+        sleep 0.1
+        waited=$((waited + 1))
+    done
+
+    if [ -S "$socket_path" ]; then
+        sudo chown "$(id -u):$(id -g)" "$socket_path" 2>/dev/null || true
+        sudo chmod 600 "$socket_path" 2>/dev/null || true
+    fi
+}
 
 # Check if virtual environment exists
 if [ -d "$SCRIPT_DIR/venv" ]; then
@@ -290,21 +366,17 @@ if [ -d "$SCRIPT_DIR/venv" ]; then
     source "$SCRIPT_DIR/venv/bin/activate"
 fi
 
-# Ensure ydotool daemon is running
-if ! pgrep -f ydotoold >/dev/null; then
-    echo "🔧 Starting ydotool daemon..."
-    sudo ydotoold &
-    sleep 2
-fi
-
-# Fix socket permissions if needed
-if [ -S "/tmp/.ydotool_socket" ]; then
-    sudo chmod 666 /tmp/.ydotool_socket 2>/dev/null || true
-fi
+ensure_ydotool_ready
 
 # Launch with error handling
 cd "$SCRIPT_DIR"
-python3 dunking_bird.py "$@" || {
+if [ "$mode" = "gui" ]; then
+    app="dunking_bird.py"
+else
+    app="dunking_bird_tui.py"
+fi
+
+python3 "$app" "$@" || {
     echo "❌ Error launching application"
     echo "💡 Try running the installation script again"
     exit 1
@@ -321,7 +393,7 @@ test_functionality() {
     info "Running system tests..."
 
     # Test 1: Python and dependencies
-    if python3 -c "import tkinter; import threading; import subprocess; import os; import time" &>/dev/null; then
+    if python3 -c "import curses; import threading; import subprocess; import os; import time" &>/dev/null; then
         success "Python environment working"
     else
         error "Python environment test failed"
@@ -329,7 +401,7 @@ test_functionality() {
     fi
 
     # Test 2: ydotool basic functionality
-    if timeout 5 ydotool type --delay 100 "" &>/dev/null; then
+    if timeout 5 ydotool type --key-delay 100 "" &>/dev/null; then
         success "ydotool working"
     else
         warning "ydotool test failed - you may need to check permissions or restart"
@@ -354,6 +426,7 @@ run_installation() {
     update_packages || return 1
     install_system_deps || return 1
     install_python_deps "$@" || return 1
+    install_kdotool_backend || return 1
     setup_ydotool || return 1
     create_launcher || return 1
     test_functionality || return 1
@@ -372,7 +445,7 @@ main() {
     # Check prerequisites
     check_sudo_nopass
 
-    # Run the main installation using install.sh
+    # Run the main installation.
     echo -e "${CYAN}🔧 Running core installation...${NC}"
     if ! run_installation "$@"; then
         error "Installation failed!"
@@ -383,8 +456,9 @@ main() {
     echo -e "${GREEN}🎉 INSTALLATION COMPLETE! 🎉${NC}"
     echo ""
     echo -e "${YELLOW}Launch options:${NC}"
-    echo -e "  ${GREEN}Option 1 (Easy):${NC} ./run_dunking_bird.sh"
-    echo -e "  ${GREEN}Option 2 (Direct):${NC} python3 dunking_bird.py"
+    echo -e "  ${GREEN}Option 1 (Default TUI):${NC} ./run_dunking_bird.sh"
+    echo -e "  ${GREEN}Option 2 (Direct TUI):${NC} python3 dunking_bird_tui.py"
+    echo -e "  ${GREEN}Option 3 (GUI):${NC} ./run_dunking_bird.sh --gui"
     echo ""
     echo -e "${CYAN}💡 Tip: Use window capture for precise targeting!${NC}"
 

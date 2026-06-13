@@ -15,6 +15,11 @@ import os
 import json
 import shutil
 
+YDOTOOL_KEY_DELAY_MS = 2
+YDOTOOL_PRE_TYPE_DELAY_S = 0.05
+YDOTOOL_POST_TYPE_DELAY_S = 0.1
+YDOTOOL_TIMEOUT_PADDING_S = 10
+
 # Import pynput with error handling
 try:
     from pynput import keyboard
@@ -477,6 +482,20 @@ class DunkingBirdApp:
         desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
         session = os.environ.get("XDG_SESSION_DESKTOP", "").lower()
         if self._command_exists("kdotool"):
+            try:
+                tmp_free = shutil.disk_usage("/tmp").free
+                if tmp_free < 10 * 1024 * 1024:
+                    return "Capture failed: /tmp is full"
+            except OSError:
+                pass
+            try:
+                r = subprocess.run(["kdotool", "getactivewindow"],
+                                   capture_output=True, text=True, timeout=3)
+                err = (r.stderr or "").strip()
+                if err:
+                    return err.splitlines()[0]
+            except Exception:
+                pass
             return "No active window"
         if self._command_exists("swaymsg"):
             return "No focused Sway window"
@@ -492,13 +511,16 @@ class DunkingBirdApp:
         env_socket = os.environ.get("YDOTOOL_SOCKET")
         if env_socket and os.path.exists(env_socket):
             return env_socket
+        runtime_dir = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
         for path in [
+            os.path.join(runtime_dir, ".ydotool_socket"),
+            os.path.join(runtime_dir, "ydotool_socket"),
             "/tmp/.ydotool_socket",
-            f"/run/user/{os.getuid()}/ydotool_socket",
-            os.path.expanduser("~/.ydotool_socket"),
             "/tmp/ydotool_socket",
+            os.path.expanduser("~/.ydotool_socket"),
         ]:
             if os.path.exists(path):
+                os.environ["YDOTOOL_SOCKET"] = path
                 return path
         try:
             r = subprocess.run(["pgrep", "-a", "ydotoold"],
@@ -549,10 +571,18 @@ class DunkingBirdApp:
 
     def _restart_ydotool_daemon(self):
         try:
+            runtime_dir = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+            socket_path = os.environ.get("YDOTOOL_SOCKET") or os.path.join(
+                runtime_dir, ".ydotool_socket")
+            os.makedirs(os.path.dirname(socket_path), exist_ok=True)
+            os.environ["YDOTOOL_SOCKET"] = socket_path
+
             subprocess.run(["sudo", "pkill", "-9", "ydotoold"],
                            capture_output=True, timeout=3)
             time.sleep(0.5)
-            subprocess.Popen(["sudo", "ydotoold"],
+            subprocess.Popen(["sudo", "ydotoold",
+                              f"--socket-path={socket_path}",
+                              f"--socket-own={os.getuid()}:{os.getgid()}"],
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             time.sleep(1.5)
             socket_path = self._get_ydotool_socket_path()
@@ -574,6 +604,11 @@ class DunkingBirdApp:
         """Type *text* + Enter via ydotool with retries.
         Caller must hold send_lock. Returns True on success."""
         max_retries = 3
+        estimated_type_seconds = max(
+            1.0,
+            len(text) * ((YDOTOOL_KEY_DELAY_MS / 1000.0) + 0.005)
+        )
+        type_timeout = int(estimated_type_seconds * 3) + YDOTOOL_TIMEOUT_PADDING_S
         for attempt in range(max_retries):
             try:
                 if not self._ensure_ydotool_socket_permissions():
@@ -583,19 +618,18 @@ class DunkingBirdApp:
                     print("ydotool not available")
                     return False
 
-                time.sleep(0.5)
-                subprocess.run(["ydotool", "type", "--delay", "50", text],
-                               capture_output=True, text=True, check=True, timeout=30)
-                time.sleep(1.0)
-                subprocess.run(["ydotool", "type", "\n"],
+                time.sleep(YDOTOOL_PRE_TYPE_DELAY_S)
+                subprocess.run(["ydotool", "type", "--key-delay", str(YDOTOOL_KEY_DELAY_MS), text],
+                               capture_output=True, text=True, check=True, timeout=type_timeout)
+                time.sleep(YDOTOOL_POST_TYPE_DELAY_S)
+                subprocess.run(["ydotool", "key", "28:1", "28:0"],
                                capture_output=True, text=True, check=True, timeout=5)
                 print(f"Successfully sent: {text}")
                 return True
 
             except subprocess.TimeoutExpired:
-                print(f"ydotool timeout (attempt {attempt + 1}/{max_retries})")
-                self._ensure_ydotool_socket_permissions()
-                time.sleep(1)
+                print(f"ydotool timeout (attempt {attempt + 1}/{max_retries}, timeout={type_timeout}s)")
+                return False
             except subprocess.CalledProcessError as e:
                 print(f"ydotool error (attempt {attempt + 1}/{max_retries}): {e}")
                 self._restart_ydotool_daemon()

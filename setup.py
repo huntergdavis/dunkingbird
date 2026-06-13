@@ -11,6 +11,7 @@ import time
 import sys
 import argparse
 import getpass
+import shutil
 from pathlib import Path
 
 class Colors:
@@ -54,6 +55,16 @@ class DunkingBirdSetup:
         except subprocess.CalledProcessError:
             return True  # Command exists but version flag may not work
 
+    def command_exists(self, cmd):
+        """Check if a command is available on PATH."""
+        return shutil.which(cmd) is not None
+
+    def is_kde_session(self):
+        """Check whether the current desktop session is KDE/Plasma."""
+        desktop = os.environ.get('XDG_CURRENT_DESKTOP', '').lower()
+        session = os.environ.get('XDG_SESSION_DESKTOP', '').lower()
+        return 'kde' in desktop or 'plasma' in desktop or 'kde' in session
+
     def check_ydotool_available(self):
         """Check if ydotool command is available using a better method"""
         try:
@@ -70,6 +81,14 @@ class DunkingBirdSetup:
             # ydotool may return error code but still be functional
             return True
 
+    def ydotool_socket_path(self):
+        """Return the socket path used by this user's ydotool client."""
+        return os.environ.get(
+            'YDOTOOL_SOCKET',
+            os.path.join(os.environ.get('XDG_RUNTIME_DIR', f"/run/user/{os.getuid()}"),
+                         '.ydotool_socket')
+        )
+
     def check_ydotool_daemon(self):
         """Check ydotool daemon status and socket"""
         # Check if daemon process is running
@@ -82,7 +101,7 @@ class DunkingBirdSetup:
             return "not_running"
 
         # Check if socket exists
-        socket_path = "/tmp/.ydotool_socket"
+        socket_path = self.ydotool_socket_path()
         if not os.path.exists(socket_path):
             return "no_socket"
 
@@ -95,8 +114,10 @@ class DunkingBirdSetup:
                 return "permission_denied"
 
             # Try a simple test
-            result = subprocess.run(['timeout', '2', 'ydotool', 'type', '--delay', '100', ''],
-                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            env = os.environ.copy()
+            env['YDOTOOL_SOCKET'] = socket_path
+            result = subprocess.run(['timeout', '2', 'ydotool', 'type', '--key-delay', '100', ''],
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
             if result.returncode != 0:
                 return "permission_denied"
 
@@ -117,9 +138,8 @@ class DunkingBirdSetup:
     def check_python_dependencies(self):
         """Check Python dependencies"""
         try:
-            import tkinter
+            import curses
             import threading
-            import pynput
             return True
         except ImportError as e:
             return False
@@ -137,12 +157,16 @@ class DunkingBirdSetup:
         else:
             self.success("ydotool command available")
 
-        # Check kdotool availability only for Wayland sessions
+        # Check Wayland window-capture backends.
         if is_wayland:
-            if not self.check_kdotool_available():
-                self.issues.append("kdotool command not found or not working")
-            else:
+            if self.check_kdotool_available():
                 self.success("kdotool command available")
+            elif self.command_exists('swaymsg'):
+                self.success("swaymsg command available")
+            elif self.command_exists('hyprctl'):
+                self.success("hyprctl command available")
+            else:
+                self.issues.append("Wayland window capture backend not found or not working")
 
         # Check ydotool daemon
         daemon_status = self.check_ydotool_daemon()
@@ -163,9 +187,9 @@ class DunkingBirdSetup:
 
         # Check Python dependencies
         if not self.check_python_dependencies():
-            self.issues.append("Python dependencies missing")
+            self.issues.append("Python TUI dependencies missing")
         else:
-            self.success("Python dependencies available")
+            self.success("Python TUI dependencies available")
 
         # Check display server
         if not (os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')):
@@ -190,22 +214,17 @@ class DunkingBirdSetup:
             self.info("Installing ydotool...")
             try:
                 subprocess.run(['sudo', 'apt', 'update'], check=False)
-                subprocess.run(['sudo', 'apt', 'install', '-y', 'ydotool', 'ydotoold'],
+                subprocess.run(['sudo', 'apt', 'install', '-y', 'ydotool'],
                               check=False)
-                fix_results.append("✅ Installed ydotool packages")
+                fix_results.append("✅ Installed ydotool package")
             except Exception as e:
                 fix_results.append(f"❌ Failed to install ydotool: {e}")
 
-        # Install kdotool if missing (for KDE Wayland)
-        if any("kdotool command not found" in issue for issue in self.issues):
-            self.info("Installing kdotool...")
-            try:
-                subprocess.run(['sudo', 'apt', 'update'], check=False)
-                subprocess.run(['sudo', 'apt', 'install', '-y', 'kdotool'],
-                              check=False)
-                fix_results.append("✅ Installed kdotool package")
-            except Exception as e:
-                fix_results.append(f"❌ Failed to install kdotool: {e}")
+        if any("Wayland window capture backend" in issue for issue in self.issues):
+            if self.is_kde_session():
+                fix_results.append("ℹ️ KDE Wayland capture requires kdotool")
+            else:
+                fix_results.append("ℹ️ Install a compositor backend such as swaymsg or hyprctl")
 
         # Start ydotool daemon
         if any("daemon not running" in issue for issue in self.issues):
@@ -217,8 +236,12 @@ class DunkingBirdSetup:
                 time.sleep(1)
 
                 # Start daemon
-                subprocess.run(['sudo', 'ydotoold'],
-                              capture_output=True, check=False)
+                socket_path = self.ydotool_socket_path()
+                os.makedirs(os.path.dirname(socket_path), exist_ok=True)
+                subprocess.Popen(['sudo', 'ydotoold',
+                                  f'--socket-path={socket_path}',
+                                  f'--socket-own={os.getuid()}:{os.getgid()}'],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 time.sleep(2)
 
                 if self.check_ydotool_daemon() != "not_running":
@@ -233,7 +256,7 @@ class DunkingBirdSetup:
                for issue in self.issues for warning in self.warnings):
             self.info("Fixing socket permissions...")
             try:
-                subprocess.run(['sudo', 'chmod', '666', '/tmp/.ydotool_socket'],
+                subprocess.run(['sudo', 'chmod', '600', self.ydotool_socket_path()],
                               check=False)
                 fix_results.append("✅ Fixed socket permissions")
             except Exception as e:
@@ -252,12 +275,10 @@ class DunkingBirdSetup:
                 fix_results.append(f"❌ Error adding to input group: {e}")
 
         # Install Python dependencies
-        if any("Python dependencies" in issue for issue in self.issues):
+        if any("Python TUI dependencies" in issue for issue in self.issues):
             self.info("Installing Python dependencies...")
             try:
-                subprocess.run(['sudo', 'apt', 'install', '-y',
-                              'python3-tk', 'python3-pip'], check=False)
-                subprocess.run(['pip3', 'install', '--user', 'pynput'],
+                subprocess.run(['sudo', 'apt', 'install', '-y', 'python3-pip'],
                               check=False)
                 fix_results.append("✅ Installed Python dependencies")
             except Exception as e:
@@ -281,23 +302,26 @@ class DunkingBirdSetup:
         if any("ydotool command not found" in issue for issue in self.issues):
             print("1. Install ydotool:")
             print("   sudo apt update")
-            print("   sudo apt install ydotool ydotoold")
+            print("   sudo apt install ydotool")
             print()
 
-        if any("kdotool command not found" in issue for issue in self.issues):
-            print("2. Install kdotool for Wayland window capture:")
-            print("   sudo apt update")
-            print("   sudo apt install kdotool")
+        if any("Wayland window capture backend" in issue for issue in self.issues):
+            print("2. Install or enable a Wayland window capture backend:")
+            print("   KDE/Plasma: cargo install --git https://github.com/jinliu/kdotool --root \"$HOME/.local\"")
+            print("   Sway: swaymsg")
+            print("   Hyprland: hyprctl")
             print()
 
         if any("daemon not running" in issue for issue in self.issues):
             print("3. Start ydotool daemon:")
-            print("   sudo ydotoold &")
+            socket_path = self.ydotool_socket_path()
+            print(f"   export YDOTOOL_SOCKET={socket_path}")
+            print(f"   sudo ydotoold --socket-path={socket_path} --socket-own=$(id -u):$(id -g) &")
             print()
 
         if any("socket" in issue for issue in self.issues):
             print("4. Fix socket permissions:")
-            print("   sudo chmod 666 /tmp/.ydotool_socket")
+            print(f"   sudo chmod 600 {self.ydotool_socket_path()}")
             print()
 
         if any("input group" in warning for warning in self.warnings):
@@ -306,14 +330,13 @@ class DunkingBirdSetup:
             print("   (logout/login required)")
             print()
 
-        if any("Python dependencies" in issue for issue in self.issues):
+        if any("Python TUI dependencies" in issue for issue in self.issues):
             print("6. Install Python dependencies:")
-            print("   sudo apt install python3-tk python3-pip")
-            print("   pip3 install --user pynput")
+            print("   sudo apt install python3 python3-pip")
             print()
 
         print("7. Or run the install script:")
-        print("   ./install.sh")
+        print("   ./easy_install.sh --venv")
 
     def interactive_setup(self):
         """Interactive setup mode"""
