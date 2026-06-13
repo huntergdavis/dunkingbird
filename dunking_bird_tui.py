@@ -6,11 +6,11 @@ and live countdowns using the same ydotool/window-targeting behavior as the GUI.
 """
 
 import curses
+from curses import textpad
 import json
 import os
 import shutil
 import subprocess
-import tempfile
 import threading
 import time
 
@@ -143,6 +143,7 @@ class DunkerTuiRow:
             with self.app.send_lock:
                 self.set_status("Sending...")
                 ok = self._do_send()
+                self.app.suppress_typed_input()
                 time.sleep(2)
             t = time.strftime("%H:%M:%S")
             self.set_status(f"Tested {t}" if ok else "Test failed")
@@ -175,6 +176,7 @@ class DunkerTuiRow:
                     return
                 self.set_status("Sending...")
                 ok = self._do_send()
+                self.app.suppress_typed_input()
                 time.sleep(2)
 
             if self.is_running:
@@ -202,10 +204,13 @@ class DunkingBirdTui:
         self.dunkers = []
         self.selected = 0
         self.send_lock = threading.Lock()
+        self.status_lock = threading.Lock()
         self.global_status = ""
+        self.suppress_input_until = 0
         self.quit_requested = False
 
         curses.curs_set(0)
+        self.stdscr.keypad(True)
         self.stdscr.timeout(200)
         self.add_dunker()
         self.runtime_checks()
@@ -215,8 +220,13 @@ class DunkingBirdTui:
             self.draw()
             key = self.stdscr.getch()
             if key != -1:
+                if time.time() < self.suppress_input_until:
+                    continue
                 self.handle_key(key)
         self.shutdown()
+
+    def suppress_typed_input(self):
+        self.suppress_input_until = time.time() + 1.0
 
     def add_dunker(self):
         self.dunkers.append(DunkerTuiRow(self, len(self.dunkers) + 1))
@@ -239,21 +249,29 @@ class DunkingBirdTui:
         n = len(self.dunkers)
         running = sum(1 for d in self.dunkers if d.is_running)
         if running:
-            self.global_status = f"{n} dunker{'s' if n != 1 else ''} ({running} running)"
+            self.set_global_status(f"{n} dunker{'s' if n != 1 else ''} ({running} running)")
         else:
-            self.global_status = f"{n} dunker{'s' if n != 1 else ''}"
+            self.set_global_status(f"{n} dunker{'s' if n != 1 else ''}")
+
+    def set_global_status(self, value):
+        with self.status_lock:
+            self.global_status = value
+
+    def get_global_status(self):
+        with self.status_lock:
+            return self.global_status
 
     def runtime_checks(self):
         try:
             if not self._check_ydotool_available():
-                self.global_status = "ydotool not found - run ./setup.py"
+                self.set_global_status("ydotool not found - run ./setup.py")
             elif (os.environ.get("XDG_SESSION_TYPE") == "wayland"
                   and not self._has_wayland_capture_backend()):
-                self.global_status = "Wayland capture backend missing - install kdotool"
+                self.set_global_status("Wayland capture backend missing - install kdotool")
             else:
                 self.update_count()
         except Exception as e:
-            self.global_status = f"Check error: {e}"
+            self.set_global_status(f"Check error: {e}")
 
     def handle_key(self, key):
         if key in (ord("q"), 27):
@@ -282,71 +300,126 @@ class DunkingBirdTui:
 
     def edit_interval(self):
         d = self.current()
-        value = self.prompt("Interval minutes", d.interval_minutes)
+        value = self.line_modal("Interval minutes", d.interval_minutes)
         if value is not None:
-            d.interval_minutes = value.strip() or d.interval_minutes
+            value = value.strip() or d.interval_minutes
+            try:
+                if float(value) <= 0:
+                    raise ValueError
+            except ValueError:
+                d.set_status("Bad interval!")
+                return
+            d.interval_minutes = value
             d.set_status("Interval set")
 
     def edit_text(self):
         d = self.current()
-        editor = os.environ.get("VISUAL") or os.environ.get("EDITOR")
-        if editor:
-            new_text = self.edit_with_external_editor(d.text_value, editor)
-        else:
-            new_text = self.prompt("Text to send", d.text_value)
+        new_text = self.text_modal(d.text_value)
         if new_text is not None:
             d.text_value = new_text.strip()
             d.set_status("Text set")
 
-    def prompt(self, label, default=""):
+    def line_modal(self, label, default=""):
         h, w = self.stdscr.getmaxyx()
-        prompt = f"{label} [{default}]: "
-        y = h - 2
-        curses.echo()
+        box_w = min(max(48, len(label) + 18), max(20, w - 4))
+        box_h = 7
+        y = max(0, (h - box_h) // 2)
+        x = max(0, (w - box_w) // 2)
+        win = curses.newwin(box_h, box_w, y, x)
+        win.keypad(True)
+        win.box()
+        self.safe_addstr(win, 1, 2, label, box_w - 4, curses.A_BOLD)
+        self.safe_addstr(win, 2, 2, f"Current: {default}", box_w - 4)
+        self.safe_addstr(win, 3, 2, "Enter keeps current, Esc cancels", box_w - 4)
+        input_w = box_w - 4
+        value = ""
+        cursor = len(value)
         curses.curs_set(1)
-        self.stdscr.move(y, 0)
-        self.stdscr.clrtoeol()
-        self.stdscr.addstr(y, 0, clip(prompt, w - 1))
-        self.stdscr.refresh()
         try:
-            raw = self.stdscr.getstr(y, min(len(prompt), w - 1), max(1, w - len(prompt) - 1))
-            value = raw.decode("utf-8")
-            return value if value else default
-        except KeyboardInterrupt:
-            return None
+            while True:
+                self.safe_addstr(win, 5, 2, " " * input_w, input_w)
+                visible = value[-input_w:] if len(value) > input_w else value
+                self.safe_addstr(win, 5, 2, visible, input_w)
+                win.move(5, 2 + min(cursor, input_w - 1))
+                win.refresh()
+                key = win.getch()
+                if key in (10, 13, curses.KEY_ENTER):
+                    return value or default
+                if key in (27,):
+                    return None
+                if key in (curses.KEY_BACKSPACE, 127, 8):
+                    if cursor > 0:
+                        value = value[:cursor - 1] + value[cursor:]
+                        cursor -= 1
+                elif key == curses.KEY_DC:
+                    if cursor < len(value):
+                        value = value[:cursor] + value[cursor + 1:]
+                elif key == curses.KEY_LEFT:
+                    cursor = max(0, cursor - 1)
+                elif key == curses.KEY_RIGHT:
+                    cursor = min(len(value), cursor + 1)
+                elif key == curses.KEY_HOME:
+                    cursor = 0
+                elif key == curses.KEY_END:
+                    cursor = len(value)
+                elif 32 <= key <= 126:
+                    ch = chr(key)
+                    value = value[:cursor] + ch + value[cursor:]
+                    cursor += 1
         finally:
-            curses.noecho()
             curses.curs_set(0)
 
-    def edit_with_external_editor(self, initial_text, editor):
-        with tempfile.NamedTemporaryFile("w+", suffix=".txt", delete=False) as tmp:
-            tmp.write(initial_text)
-            tmp.write("\n")
-            path = tmp.name
+    def text_modal(self, initial_text):
+        h, w = self.stdscr.getmaxyx()
+        win = curses.newwin(h, w, 0, 0)
+        win.keypad(True)
+        text_h = max(1, h - 5)
+        text_w = max(1, w - 4)
+        edit = curses.newwin(text_h, text_w, 3, 2)
+        edit.keypad(True)
+        edit.scrollok(True)
+
+        cancelled = False
+
+        def validate(ch):
+            nonlocal cancelled
+            if ch == 27:
+                cancelled = True
+                return 7
+            if ch in (9,):
+                return ord(" ")
+            return ch
+
         try:
-            curses.def_prog_mode()
-            curses.endwin()
-            subprocess.call([editor, path])
-            curses.reset_prog_mode()
-            curses.curs_set(0)
-            with open(path, "r", encoding="utf-8") as f:
-                return f.read().strip()
+            win.erase()
+            win.box()
+            self.safe_addstr(win, 1, 2, "Edit text to send", w - 4, curses.A_BOLD)
+            self.safe_addstr(win, 2, 2, "Ctrl+G saves, Esc cancels", w - 4)
+            for idx, line in enumerate(initial_text.splitlines() or [""]):
+                if idx >= text_h:
+                    break
+                self.safe_addstr(edit, idx, 0, line, text_w)
+            win.refresh()
+            edit.refresh()
+            curses.curs_set(1)
+            box = textpad.Textbox(edit, insert_mode=True)
+            text = box.edit(validate)
+            if cancelled:
+                return None
+            return text.rstrip()
         finally:
-            try:
-                os.unlink(path)
-            except OSError:
-                pass
+            curses.curs_set(0)
 
     def draw(self):
         self.stdscr.erase()
         h, w = self.stdscr.getmaxyx()
-        self.stdscr.addstr(0, 0, clip("Dunking Bird TUI", w - 1), curses.A_BOLD)
+        self.safe_addstr(self.stdscr, 0, 0, "Dunking Bird TUI", w - 1, curses.A_BOLD)
         help_text = "a add  d remove  c capture  t test  i interval  e text  space start/stop  q quit"
-        self.stdscr.addstr(1, 0, clip(help_text, w - 1))
-        self.stdscr.hline(2, 0, "-", max(0, w - 1))
+        self.safe_addstr(self.stdscr, 1, 0, help_text, w - 1)
+        self.safe_hline(self.stdscr, 2, 0, w - 1)
 
         header = self.format_row("#", "Status", "Window", "Min", "Text", w)
-        self.stdscr.addstr(3, 0, header, curses.A_BOLD)
+        self.safe_addstr(self.stdscr, 3, 0, header, w - 1, curses.A_BOLD)
 
         visible_rows = max(0, h - 7)
         start = 0
@@ -363,10 +436,10 @@ class DunkingBirdTui:
                 w,
             )
             attr = curses.A_REVERSE if index == self.selected else curses.A_NORMAL
-            self.stdscr.addstr(screen_y, 0, row, attr)
+            self.safe_addstr(self.stdscr, screen_y, 0, row, w - 1, attr)
 
-        self.stdscr.hline(h - 3, 0, "-", max(0, w - 1))
-        self.stdscr.addstr(h - 2, 0, clip(self.global_status, w - 1))
+        self.safe_hline(self.stdscr, h - 3, 0, w - 1)
+        self.safe_addstr(self.stdscr, h - 2, 0, self.get_global_status(), w - 1)
         self.stdscr.refresh()
 
     def format_row(self, num, status, window, minutes, text, width):
@@ -377,7 +450,30 @@ class DunkingBirdTui:
             clip(minutes, 7).rjust(7),
             clip(text, max(10, width - 62)),
         ]
-        return clip(" ".join(columns), width - 1)
+        row = clip(" ".join(columns), width - 1)
+        return row.ljust(max(0, width - 1))
+
+    def safe_hline(self, win, y, x, width):
+        if width <= 0:
+            return
+        try:
+            win.hline(y, x, "-", width)
+        except curses.error:
+            pass
+
+    def safe_addstr(self, win, y, x, value, width, attr=0):
+        if width <= 0:
+            return
+        try:
+            max_y, max_x = win.getmaxyx()
+            if y < 0 or y >= max_y or x < 0 or x >= max_x:
+                return
+            usable = min(width, max_x - x - 1)
+            if usable <= 0:
+                return
+            win.addstr(y, x, clip(value, usable).ljust(usable), attr)
+        except curses.error:
+            pass
 
     def shutdown(self):
         for dunker in self.dunkers:
@@ -457,14 +553,14 @@ class DunkingBirdTui:
     def _ensure_ydotool_socket_permissions(self):
         socket_path = self._get_ydotool_socket_path()
         if not socket_path:
-            print("No ydotool socket found - restarting daemon")
+            self.set_global_status("No ydotool socket found - restarting daemon")
             return self._restart_ydotool_daemon()
         try:
             try:
                 r = subprocess.run(["pgrep", "-x", "ydotoold"],
                                    capture_output=True, timeout=3)
                 if r.returncode != 0:
-                    print("ydotoold not running (stale socket), restarting...")
+                    self.set_global_status("ydotoold not running; restarting...")
                     return self._restart_ydotool_daemon()
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
                 pass
@@ -472,20 +568,20 @@ class DunkingBirdTui:
             if os.access(socket_path, os.R_OK | os.W_OK):
                 return True
 
-            print(f"Socket {socket_path} not accessible, fixing permissions...")
+            self.set_global_status(f"Fixing ydotool socket permissions")
             try:
                 subprocess.run(["sudo", "chmod", "666", socket_path],
                                capture_output=True, timeout=5)
                 if os.access(socket_path, os.R_OK | os.W_OK):
-                    print(f"Fixed socket permissions on {socket_path}")
+                    self.set_global_status("Fixed ydotool socket permissions")
                     return True
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
                 pass
 
-            print("chmod failed, restarting ydotool daemon...")
+            self.set_global_status("Restarting ydotool daemon")
             return self._restart_ydotool_daemon()
         except Exception as e:
-            print(f"Socket permission error: {e}")
+            self.set_global_status(f"Socket permission error: {e}")
             return self._restart_ydotool_daemon()
 
     def _restart_ydotool_daemon(self):
@@ -514,7 +610,7 @@ class DunkingBirdTui:
                 return os.access(socket_path, os.R_OK | os.W_OK)
             return False
         except Exception as e:
-            print(f"Failed to restart ydotool daemon: {e}")
+            self.set_global_status(f"Failed to restart ydotool daemon: {e}")
             return False
 
     def send_text_ydotool(self, text):
@@ -527,10 +623,10 @@ class DunkingBirdTui:
         for attempt in range(max_retries):
             try:
                 if not self._ensure_ydotool_socket_permissions():
-                    print("Socket check failed, trying anyway...")
+                    self.set_global_status("Socket check failed, trying anyway")
 
                 if not self._check_ydotool_available():
-                    print("ydotool not available")
+                    self.set_global_status("ydotool not available")
                     return False
 
                 time.sleep(YDOTOOL_PRE_TYPE_DELAY_S)
@@ -539,20 +635,21 @@ class DunkingBirdTui:
                 time.sleep(YDOTOOL_POST_TYPE_DELAY_S)
                 subprocess.run(["ydotool", "key", "28:1", "28:0"],
                                capture_output=True, text=True, check=True, timeout=5)
-                print(f"Successfully sent: {text}")
+                self.set_global_status("Send completed")
                 return True
 
             except subprocess.TimeoutExpired:
-                print(f"ydotool timeout (attempt {attempt + 1}/{max_retries}, timeout={type_timeout}s)")
+                self.set_global_status(
+                    f"ydotool timeout (attempt {attempt + 1}/{max_retries})")
                 return False
             except subprocess.CalledProcessError as e:
-                print(f"ydotool error (attempt {attempt + 1}/{max_retries}): {e}")
+                self.set_global_status(f"ydotool error (attempt {attempt + 1}/{max_retries})")
                 self._restart_ydotool_daemon()
             except Exception as e:
-                print(f"Unexpected ydotool error (attempt {attempt + 1}/{max_retries}): {e}")
+                self.set_global_status(f"Unexpected ydotool error: {e}")
                 time.sleep(1)
 
-        print("All ydotool retries exhausted")
+        self.set_global_status("All ydotool retries exhausted")
         return False
 
     def focus_window_for_dunker(self, window_id, window_name, compositor):
@@ -560,14 +657,14 @@ class DunkingBirdTui:
             return True
 
         try:
-            print(f"Focusing: {window_name}")
+            self.set_global_status(f"Focusing: {window_name}")
             r = subprocess.run(["kdotool", "windowactivate", window_id],
                                capture_output=True, text=True, timeout=3)
             if r.returncode == 0:
-                print(f"Focused {window_name}")
+                self.set_global_status(f"Focused {window_name}")
                 time.sleep(0.2)
                 return True
-            print(f"kdotool failed ({r.returncode}), Alt+Tab fallback")
+            self.set_global_status("kdotool failed; using Alt+Tab fallback")
             subprocess.run(["ydotool", "key", "alt+Tab"], timeout=1)
             time.sleep(0.2)
             return True
@@ -577,10 +674,10 @@ class DunkingBirdTui:
                 time.sleep(0.2)
                 return True
             except Exception as e:
-                print(f"Focus failed completely: {e}")
+                self.set_global_status(f"Focus failed: {e}")
                 return True
         except Exception as e:
-            print(f"Focus error: {e}")
+            self.set_global_status(f"Focus error: {e}")
             return True
 
     def get_wayland_window_info(self):

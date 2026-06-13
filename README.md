@@ -108,8 +108,8 @@ The installer automatically:
 
 2. **Configure your settings**:
    - Select a dunker with `j`/`k` or the arrow keys
-   - Press `i` to set the interval in minutes (default: 10)
-   - Press `e` to edit the text to send (default: "continue")
+   - Press `i` to set the interval in minutes (default: 10); `Enter` saves and `Esc` cancels
+   - Press `e` to open the full-screen text editor; `Ctrl+G` saves and `Esc` cancels
 
 3. **Target a specific window (NEW!)**:
    - Press `c` to capture a window
